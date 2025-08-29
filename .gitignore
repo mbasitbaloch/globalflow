@@ -147,7 +147,6 @@ Thumbs.db
 # Database files (if using SQLite)
 *.db
 *.sqlite
-*.sqlite3
 
 # FastAPI specific
 # Remove if you want to keep these, but typically they're generated
