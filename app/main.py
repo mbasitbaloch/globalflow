@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .routes import translate, ingest
+from .routes import hs_users
 from .database import Base, engine
 
 Base.metadata.create_all(bind=engine)
@@ -20,3 +21,4 @@ app.add_middleware(
 
 app.include_router(translate.router, prefix="/api")
 app.include_router(ingest.router, prefix="/api")
+app.include_router(hs_users.router, prefix="/api")
