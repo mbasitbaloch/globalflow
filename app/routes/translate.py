@@ -82,7 +82,7 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
     json_blob = json.dumps(translated_data, ensure_ascii=False)
 
     response = client.embeddings.create(
-        model="text-embedding-3-large",
+        model="text-embedding-3-small",
         input=json_blob
     )
 
