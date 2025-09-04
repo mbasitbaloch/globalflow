@@ -82,7 +82,7 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
     json_blob = json.dumps(translated_data, ensure_ascii=False)
 
     response = client.embeddings.create(
-        model="text-embedding-3-small",
+        model="text-embedding-3-large",
         input=json_blob
     )
 
@@ -128,7 +128,21 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
     os.makedirs("tmp", exist_ok=True)
 
     with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(translated_data, f, ensure_ascii=False, indent=2)
+        json.dump(raw_data, f, ensure_ascii=False, indent=2)
+
+    # translated_data = await fast_translate_json(
+    #     raw_data,
+    #     req["targetLanguage"],
+    #     req["brandTone"]
+    # )
+
+    # # Save translated JSON to file
+    # file_name = f"translated_{uuid.uuid4().hex}.json"
+    # file_path = os.path.join("tmp", file_name)
+    # os.makedirs("tmp", exist_ok=True)
+
+    # with open(file_path, "w", encoding="utf-8") as f:
+    #     json.dump(translated_data, f, ensure_ascii=False, indent=2)
 
     # Return file for download
     return FileResponse(
