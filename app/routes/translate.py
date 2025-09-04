@@ -2,15 +2,27 @@ from fastapi import APIRouter, Depends, Body
 from sqlalchemy.orm import Session
 import requests
 from ..database import SessionLocal
+from ..models import Translation
 from ..services.translator import fast_translate_json
 from fastapi.responses import JSONResponse, FileResponse
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny, PointStruct, VectorParams, Distance
 import json
 import os
 import uuid
+from dotenv import load_dotenv
+# from langchain.embeddings import GoogleGenerativeAIEmbeddings
+import google.generativeai as genai
+from openai import OpenAI
+from datetime import datetime
 
+load_dotenv()
+COLLECTION_NAME = os.getenv("COLLECTION_NAME")
 
 router = APIRouter()
 
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def get_db():
     db = SessionLocal()
@@ -19,9 +31,28 @@ def get_db():
     finally:
         db.close()
 
+qdrant = QdrantClient(
+    url=os.getenv("QDRANT_URL"),
+    api_key=os.getenv("QDRANT_API_KEY"),
+    prefer_grpc=False,
+    timeout=60
+)
+collection_exists = False
+if COLLECTION_NAME:
+    collection_exists = qdrant.collection_exists(COLLECTION_NAME)
+    if not collection_exists:
+        qdrant.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(
+                size=768,
+                distance=Distance.COSINE
+            ),
+        )
+
 
 @router.post("/shopify/translate")
 async def shopify_translate(req: dict, db: Session = Depends(get_db)):
+    today_date = datetime.now().strftime("%Y-%m-%d")
     """
     Expect body:
     {
@@ -47,6 +78,50 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         req["brandTone"]
     )
 
+
+    json_blob = json.dumps(translated_data, ensure_ascii=False)
+
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=json_blob
+    )
+
+    embedding = response.data[0].embedding  # <-- correct way
+
+
+    translation_point = PointStruct(
+        id=str(uuid.uuid4()),
+        vector=embedding,
+        payload={
+            "shopDomain": req["shopDomain"],
+            "targetLanguage": req["targetLanguage"],
+            "translated_text": translated_data,
+            "brandTone": req["brandTone"],
+            "date": today_date
+        }
+    )
+
+    if COLLECTION_NAME is None:
+        raise ValueError("COLLECTION_NAME environment variable is not set.")
+    qdrant.upsert(
+        collection_name=COLLECTION_NAME,
+        points=[translation_point]
+    )
+    count = qdrant.count(
+        collection_name=COLLECTION_NAME,
+        exact=True
+    )
+
+    newObj = Translation(
+        source_text=raw_data,
+        target_text=translated_data,
+        target_lang=req["targetLanguage"],
+        content_type="json"
+    )
+    db.add(newObj)
+    db.commit()
+    db.refresh(newObj)
+
     # Save translated JSON to file
     file_name = f"translated_{uuid.uuid4().hex}.json"
     file_path = os.path.join("tmp", file_name)
@@ -61,7 +136,7 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         media_type="application/json",
         filename=file_name
     )
-
+    
     # return {"translated_json": translated_data}
 
 
