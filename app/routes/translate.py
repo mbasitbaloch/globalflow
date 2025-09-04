@@ -24,12 +24,14 @@ router = APIRouter()
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+
 def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
+
 
 qdrant = QdrantClient(
     url=os.getenv("QDRANT_URL"),
@@ -78,7 +80,6 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         req["brandTone"]
     )
 
-
     json_blob = json.dumps(translated_data, ensure_ascii=False)
 
     response = client.embeddings.create(
@@ -87,7 +88,6 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
     )
 
     embedding = response.data[0].embedding  # <-- correct way
-
 
     translation_point = PointStruct(
         id=str(uuid.uuid4()),
@@ -130,19 +130,19 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(raw_data, f, ensure_ascii=False, indent=2)
 
-    # translated_data = await fast_translate_json(
-    #     raw_data,
-    #     req["targetLanguage"],
-    #     req["brandTone"]
-    # )
+    translated_data = await fast_translate_json(
+        raw_data,
+        req["targetLanguage"],
+        req["brandTone"]
+    )
 
-    # # Save translated JSON to file
-    # file_name = f"translated_{uuid.uuid4().hex}.json"
-    # file_path = os.path.join("tmp", file_name)
-    # os.makedirs("tmp", exist_ok=True)
+    # Save translated JSON to file
+    file_name = f"translated_{uuid.uuid4().hex}.json"
+    file_path = os.path.join("tmp", file_name)
+    os.makedirs("tmp", exist_ok=True)
 
-    # with open(file_path, "w", encoding="utf-8") as f:
-    #     json.dump(translated_data, f, ensure_ascii=False, indent=2)
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(translated_data, f, ensure_ascii=False, indent=2)
 
     # Return file for download
     return FileResponse(
@@ -150,7 +150,7 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         media_type="application/json",
         filename=file_name
     )
-    
+
     # return {"translated_json": translated_data}
 
 
