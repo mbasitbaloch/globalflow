@@ -47,7 +47,22 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         req["brandTone"]
     )
 
-    return {"translated_json": translated_data}
+    # Save translated JSON to file
+    file_name = f"translated_{uuid.uuid4().hex}.json"
+    file_path = os.path.join("tmp", file_name)
+    os.makedirs("tmp", exist_ok=True)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(translated_data, f, ensure_ascii=False, indent=2)
+
+    # Return file for download
+    return FileResponse(
+        file_path,
+        media_type="application/json",
+        filename=file_name
+    )
+
+    # return {"translated_json": translated_data}
 
 
 # 2 Generic JSON translator (returns JSON in response)
