@@ -45,6 +45,10 @@ def is_translateable(text: str) -> bool:
         return False
     if re.match(r"^https?://", text):  # URLs
         return False
+    if text.startswith("shopify."):
+        return False
+    if text.startswith("customer."):
+        return False
     return True
 
 

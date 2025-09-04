@@ -41,19 +41,27 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
     response.raise_for_status()
     raw_data = response.json()
 
-    translated_data = await fast_translate_json(
-        raw_data,
-        req["targetLanguage"],
-        req["brandTone"]
-    )
-
-    # Save translated JSON to file
-    file_name = f"translated_{uuid.uuid4().hex}.json"
-    file_path = os.path.join("tmp", file_name)
-    os.makedirs("tmp", exist_ok=True)
+  # Save fetcged JSON to file
+    file_name = f"fetched{uuid.uuid4().hex}.json"
+    file_path = os.path.join("fetched_data", file_name)
+    os.makedirs("fetched_data", exist_ok=True)
 
     with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(translated_data, f, ensure_ascii=False, indent=2)
+        json.dump(raw_data, f, ensure_ascii=False, indent=2)
+
+    # translated_data = await fast_translate_json(
+    #     raw_data,
+    #     req["targetLanguage"],
+    #     req["brandTone"]
+    # )
+
+    # # Save translated JSON to file
+    # file_name = f"translated_{uuid.uuid4().hex}.json"
+    # file_path = os.path.join("tmp", file_name)
+    # os.makedirs("tmp", exist_ok=True)
+
+    # with open(file_path, "w", encoding="utf-8") as f:
+    #     json.dump(translated_data, f, ensure_ascii=False, indent=2)
 
     # Return file for download
     return FileResponse(
