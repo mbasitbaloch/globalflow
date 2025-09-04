@@ -4,19 +4,21 @@ from qdrant_client.http import models
 from qdrant_client.http.models import Distance, VectorParams
 from ..config import settings
 import datetime
+import os
 
 # Qdrant client
 client = QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
 
 # OpenAI embeddings model (small = fast, large = better accuracy)
 embedding_model = OpenAIEmbeddings(model="text-embedding-3-small")
+collection_name = os.getenv("COLLECTION_NAME")
 
 # Recreate / ensure collection exists
-client.recreate_collection(
-    collection_name="glflow",
-    # text-embedding-3 returns 1536 dims
-    vectors_config=VectorParams(size=1536, distance=Distance.COSINE)
-)
+# client.recreate_collection(
+#     collection_name="glflow",
+#     # text-embedding-3 returns 1536 dims
+#     vectors_config=VectorParams(size=1536, distance=Distance.COSINE)
+# )
 
 
 def embed_and_store(text: str, translation_id: int):
