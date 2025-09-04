@@ -163,6 +163,7 @@ async def fast_translate_json(data, target_lang, brand_tone):
     else:
         print("⚠ No fullData.storeData found, skipping translation.")
         return data
+    print("data into fullData is:", target_data)
 
     # Step 1: collect translateable strings with their positions
     def collect_strings(d, path=None):
