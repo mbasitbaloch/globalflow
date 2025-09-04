@@ -20,7 +20,7 @@ def translate_text(text, tenant, target_lang):
         input_variables=["input"],
     )
 
-    llm = ChatOpenAI(model="gpt-4o-mini")
+    llm = ChatOpenAI(model="gpt-4.1")
     final_prompt = few_shot.format(input=text)
     result = llm.predict(final_prompt)
     return result

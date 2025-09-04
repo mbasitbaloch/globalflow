@@ -1,112 +1,175 @@
 import random
+import re
 import asyncio
-from openai import AsyncOpenAI
 import os
+from openai import AsyncOpenAI
+import google.generativeai as genai  # Gemini SDK
 
-
-client = AsyncOpenAI(
+openai_client = AsyncOpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
-    timeout=200.0
+    timeout=120.0
 )
 
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 
-# Adjustable settings
-BATCH_SIZE = 300  # 300 strings per batch
-
-MAX_CONCURRENCY = 6  # 20 parallel calls
-
+# ==== CONFIG ====
+BATCH_SIZE = 100
+MAX_CONCURRENCY = 3
 semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
+# keep track of which model to use (round robin)
+model_cycle = ["openai", "gemini"]
+model_index = 0
 
-async def with_retry(fn, *args, retries=5, **kwargs):
+
+# ========== FILTER HELPERS ==========
+def is_translateable(text: str) -> bool:
+    """Skip IDs, hashes, timestamps, numbers, placeholders, empty strings"""
+    if not text or not text.strip():
+        return False
+    if text.isdigit():
+        return False
+    if re.match(r"^\d+(\.\d+)?$", text):  # numbers like 129.00, 0.00
+        return False
+    if re.match(r"^\d{4}-\d{2}-\d{2}T", text):  # ISO timestamps
+        return False
+    if re.match(r"^[a-f0-9]{32,64}$", text):  # hashes
+        return False
+    if text.startswith("gid://"):
+        return False
+    if re.match(r"^\{\{.*\}\}$", text):  # {{placeholders}}
+        return False
+    if "@" in text and "." in text:  # emails
+        return False
+    if re.match(r"^https?://", text):  # URLs
+        return False
+    return True
+
+
+async def with_retry(fn, *args, retries=3, **kwargs):
     for i in range(retries):
         try:
             return await fn(*args, **kwargs)
         except Exception as e:
-            if "Rate limit" in str(e):
+            if "Rate limit" in str(e) or "quota" in str(e).lower():
                 wait = (2 ** i) + random.random()
                 print(f"⚠ Rate limit, retrying in {wait:.2f}s...")
                 await asyncio.sleep(wait)
             else:
-                raise
+                print(f"⚠ Error: {e}, retrying...")
+                await asyncio.sleep(2)
     raise Exception("Max retries reached")
 
 
+async def translate_openai(strings, target_lang, brand_tone):
+    prompt = f"""
+    Translate the following {len(strings)} strings into {target_lang}.
+    Maintain the brand tone as '{brand_tone}'.
+    Return ONLY translations line by line, same order:
+    """
+    for i, s in enumerate(strings, 1):
+        prompt += f"{i}. {s}\n"
+
+    resp = await openai_client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=1,
+    )
+    return resp.choices[0].message.content.strip().split("\n")
+
+
+async def translate_gemini(strings, target_lang, brand_tone):
+    prompt = f"""
+    Translate the following {len(strings)} strings into {target_lang}.
+    Maintain the brand tone as '{brand_tone}'.
+    Return ONLY translations line by line, same order:
+    """
+    for i, s in enumerate(strings, 1):
+        prompt += f"{i}. {s}\n"
+
+    resp = gemini_model.generate_content(prompt)
+    lines = resp.text.strip().split("\n")
+    return [line.strip() for line in lines if line.strip()]
+
+
 async def _translate_batch(strings, target_lang, brand_tone, batch_num, total_batches):
+    global model_index
     async with semaphore:
-        prompt = f"""
-        Translate the following {len(strings)} strings into {target_lang}.
-        Maintain the brand tone as '{brand_tone}'.
-        Return ONLY translations line by line, same order:
-        """
-        for i, s in enumerate(strings, 1):
-            prompt += f"{i}. {s}\n"
+        print(
+            f"\n[DEBUG] Batch {batch_num}/{total_batches} using {len(strings)} strings")
+        for i, s in enumerate(strings[:5], 1):
+            print(f"   {i}. {s[:120]}")
+        current_model = model_cycle[model_index % len(model_cycle)]
+        model_index += 1
 
-        resp = await with_retry(
-            client.chat.completions.create,
-            model="gpt-4.1",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-        )
+        try:
+            if current_model == "openai":
+                result = await with_retry(translate_openai, strings, target_lang, brand_tone)
+            else:
+                result = await with_retry(translate_gemini, strings, target_lang, brand_tone)
+        except Exception as e:
+            print(f"⚠ {current_model} failed, falling back: {e}")
+            if current_model == "openai":
+                result = await translate_gemini(strings, target_lang, brand_tone)
+            else:
+                result = await translate_openai(strings, target_lang, brand_tone)
 
-        print(f"[✔] Completed batch {batch_num}/{total_batches}")
-        return resp.choices[0].message.content.strip().split("\n")
+        print(
+            f"[✔] Completed batch {batch_num}/{total_batches} via {current_model}")
+        return result
 
 
 async def fast_translate_json(data, target_lang, brand_tone):
-    """Super-fast concurrent translation of JSON"""
-
-    # 1. Collect strings
     strings = []
+    positions = []
 
-    def collect_strings(d):
+    # Step 1: collect only translateable strings + their positions
+    def collect_strings(d, path=None):
+        if path is None:
+            path = []
         if isinstance(d, str):
-            strings.append(d)
+            if is_translateable(d):
+                strings.append(d)
+                positions.append(path)
         elif isinstance(d, dict):
-            for v in d.values():
-                collect_strings(v)
+            for k, v in d.items():
+                collect_strings(v, path + [k])
         elif isinstance(d, list):
-            for item in d:
-                collect_strings(item)
+            for i, item in enumerate(d):
+                collect_strings(item, path + [i])
 
     collect_strings(data)
+    print(f"Total translateable strings: {len(strings)}")
 
-    print(f"Total strings to translate: {len(strings)}")
-
-    # 2. Make batches
+    # Step 2: batch + send for translation
     batches = [strings[i:i+BATCH_SIZE]
                for i in range(0, len(strings), BATCH_SIZE)]
     total_batches = len(batches)
 
-    # 3. Launch parallel tasks
     tasks = [
         _translate_batch(batch, target_lang, brand_tone, idx+1, total_batches)
         for idx, batch in enumerate(batches)
     ]
     batch_results = await asyncio.gather(*tasks)
-
-    # 4. Flatten results
     translated_lines = [line.strip()
                         for batch in batch_results for line in batch if line.strip()]
+
+    # Step 3: inject translations back into JSON
     it = iter(translated_lines)
 
-    # 5. Replace strings in original JSON
-    def replace_strings(d):
-        if isinstance(d, str):
-            return next(it, d)
-        elif isinstance(d, dict):
-            return {k: replace_strings(v) for k, v in d.items()}
-        elif isinstance(d, list):
-            return [replace_strings(item) for item in d]
-        return d
+    def set_value(d, path, value):
+        ref = d
+        for p in path[:-1]:
+            ref = ref[p]
+        ref[path[-1]] = value
 
-    final_data = replace_strings(data)
+    for path in positions:
+        set_value(data, path, next(it, ""))
 
-    # ✅ Final summary
     print(
         f"✅ Translation completed: {len(translated_lines)}/{len(strings)} strings translated")
-
-    return final_data
+    return data
 
 
 # import os
