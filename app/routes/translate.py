@@ -11,10 +11,10 @@ import json
 import os
 import uuid
 from dotenv import load_dotenv
-# from langchain.embeddings import GoogleGenerativeAIEmbeddings
-import google.generativeai as genai
 from openai import OpenAI
 from datetime import datetime
+# from langchain.embeddings import GoogleGenerativeAIEmbeddings
+# import google.generativeai as genai
 
 load_dotenv()
 COLLECTION_NAME = os.getenv("COLLECTION_NAME")

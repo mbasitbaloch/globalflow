@@ -5,8 +5,6 @@ import os
 from openai import AsyncOpenAI
 # import google.generativeai as genai  # Gemini SDK
 from google import genai
-from google.genai import types
-
 
 openai_client = AsyncOpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
@@ -14,8 +12,6 @@ openai_client = AsyncOpenAI(
 )
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-
 
 
 # genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
