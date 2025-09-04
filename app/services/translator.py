@@ -3,15 +3,21 @@ import re
 import asyncio
 import os
 from openai import AsyncOpenAI
-import google.generativeai as genai  # Gemini SDK
+# import google.generativeai as genai  # Gemini SDK
+from google import genai
+# from google.genai import types
+
 
 openai_client = AsyncOpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
     timeout=120.0
 )
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+
+# genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+# gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 
 # ==== CONFIG ====
 BATCH_SIZE = 100
@@ -84,7 +90,11 @@ async def translate_openai(strings, target_lang, brand_tone):
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
     )
-    return resp.choices[0].message.content.strip().split("\n")
+
+    content = resp.choices[0].message.content
+    if content is None:
+        return []
+    return content.strip().split("\n")
 
 
 async def translate_gemini(strings, target_lang, brand_tone):
@@ -98,8 +108,15 @@ async def translate_gemini(strings, target_lang, brand_tone):
     for i, s in enumerate(strings, 1):
         prompt += f"{i}. {s}\n"
 
-    resp = gemini_model.generate_content(prompt)
-    lines = resp.text.strip().split("\n")
+    # resp = gemini_model.generate_content(prompt)
+
+    resp = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+    )
+
+    lines = resp.text.strip().split("\n") if resp.text is not None else []
+
     return [line.strip() for line in lines if line.strip()]
 
 
@@ -133,8 +150,15 @@ async def _translate_batch(strings, target_lang, brand_tone, batch_num, total_ba
 
 # ==== MAIN JSON TRANSLATOR ====
 async def fast_translate_json(data, target_lang, brand_tone):
-    string_map = {}     # {original_string: translated_string}
-    positions = []      # [(path, original_string)]
+    string_map = {}
+    positions = []
+
+    # Restrict to only fullData.storeData
+    if "fullData" in data and "storeData" in data["fullData"]:
+        target_data = data["fullData"]["storeData"]
+    else:
+        print("⚠ No fullData.storeData found, skipping translation.")
+        return data
 
     # Step 1: collect translateable strings with their positions
     def collect_strings(d, path=None):
@@ -150,7 +174,7 @@ async def fast_translate_json(data, target_lang, brand_tone):
             for i, item in enumerate(d):
                 collect_strings(item, path + [i])
 
-    collect_strings(data)
+    collect_strings(target_data)
 
     unique_strings = list({s for _, s in positions})
     print(f"Total unique translateable strings: {len(unique_strings)}")
@@ -181,7 +205,7 @@ async def fast_translate_json(data, target_lang, brand_tone):
 
     for path, orig in positions:
         if orig in string_map:
-            set_value(data, path, string_map[orig])
+            set_value(target_data, path, string_map[orig])
 
     print(
         f"✅ Translation completed: {len(string_map)}/{len(unique_strings)} unique strings translated")

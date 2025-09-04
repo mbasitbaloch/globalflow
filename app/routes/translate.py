@@ -2,14 +2,27 @@ from fastapi import APIRouter, Depends, Body
 from sqlalchemy.orm import Session
 import requests
 from ..database import SessionLocal
+from ..models import Translation
 from ..services.translator import fast_translate_json
 from fastapi.responses import JSONResponse, FileResponse
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny, PointStruct, VectorParams, Distance
 import json
 import os
 import uuid
+from dotenv import load_dotenv
+# from langchain.embeddings import GoogleGenerativeAIEmbeddings
+import google.generativeai as genai
+from openai import OpenAI
+from datetime import datetime
 
+load_dotenv()
+COLLECTION_NAME = os.getenv("COLLECTION_NAME")
 
 router = APIRouter()
+
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 def get_db():
@@ -20,8 +33,28 @@ def get_db():
         db.close()
 
 
+qdrant = QdrantClient(
+    url=os.getenv("QDRANT_URL"),
+    api_key=os.getenv("QDRANT_API_KEY"),
+    prefer_grpc=False,
+    timeout=60
+)
+collection_exists = False
+if COLLECTION_NAME:
+    collection_exists = qdrant.collection_exists(COLLECTION_NAME)
+    if not collection_exists:
+        qdrant.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(
+                size=768,
+                distance=Distance.COSINE
+            ),
+        )
+
+
 @router.post("/shopify/translate")
 async def shopify_translate(req: dict, db: Session = Depends(get_db)):
+    today_date = datetime.now().strftime("%Y-%m-%d")
     """
     Expect body:
     {
@@ -41,27 +74,75 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
     response.raise_for_status()
     raw_data = response.json()
 
-  # Save fetcged JSON to file
-    file_name = f"fetched{uuid.uuid4().hex}.json"
-    file_path = os.path.join("fetched_data", file_name)
-    os.makedirs("fetched_data", exist_ok=True)
+    translated_data = await fast_translate_json(
+        raw_data,
+        req["targetLanguage"],
+        req["brandTone"]
+    )
+
+    json_blob = json.dumps(translated_data, ensure_ascii=False)
+
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=json_blob
+    )
+
+    embedding = response.data[0].embedding  # <-- correct way
+
+    translation_point = PointStruct(
+        id=str(uuid.uuid4()),
+        vector=embedding,
+        payload={
+            "shopDomain": req["shopDomain"],
+            "targetLanguage": req["targetLanguage"],
+            "translated_text": translated_data,
+            "brandTone": req["brandTone"],
+            "date": today_date
+        }
+    )
+
+    if COLLECTION_NAME is None:
+        raise ValueError("COLLECTION_NAME environment variable is not set.")
+    qdrant.upsert(
+        collection_name=COLLECTION_NAME,
+        points=[translation_point]
+    )
+    count = qdrant.count(
+        collection_name=COLLECTION_NAME,
+        exact=True
+    )
+
+    newObj = Translation(
+        source_text=raw_data,
+        target_text=translated_data,
+        target_lang=req["targetLanguage"],
+        content_type="json"
+    )
+    db.add(newObj)
+    db.commit()
+    db.refresh(newObj)
+
+    # Save translated JSON to file
+    file_name = f"translated_{uuid.uuid4().hex}.json"
+    file_path = os.path.join("tmp", file_name)
+    os.makedirs("tmp", exist_ok=True)
 
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(raw_data, f, ensure_ascii=False, indent=2)
 
-    # translated_data = await fast_translate_json(
-    #     raw_data,
-    #     req["targetLanguage"],
-    #     req["brandTone"]
-    # )
+    translated_data = await fast_translate_json(
+        raw_data,
+        req["targetLanguage"],
+        req["brandTone"]
+    )
 
-    # # Save translated JSON to file
-    # file_name = f"translated_{uuid.uuid4().hex}.json"
-    # file_path = os.path.join("tmp", file_name)
-    # os.makedirs("tmp", exist_ok=True)
+    # Save translated JSON to file
+    file_name = f"translated_{uuid.uuid4().hex}.json"
+    file_path = os.path.join("tmp", file_name)
+    os.makedirs("tmp", exist_ok=True)
 
-    # with open(file_path, "w", encoding="utf-8") as f:
-    #     json.dump(translated_data, f, ensure_ascii=False, indent=2)
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(translated_data, f, ensure_ascii=False, indent=2)
 
     # Return file for download
     return FileResponse(
