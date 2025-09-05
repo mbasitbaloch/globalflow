@@ -122,19 +122,13 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(newObj)
 
-    # Save translated JSON to file
-    file_name = f"translated_{uuid.uuid4().hex}.json"
-    file_path = os.path.join("tmp", file_name)
-    os.makedirs("tmp", exist_ok=True)
+    # # Save translated JSON to file
+    # file_name = f"translated_{uuid.uuid4().hex}.json"
+    # file_path = os.path.join("tmp", file_name)
+    # os.makedirs("tmp", exist_ok=True)
 
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(raw_data, f, ensure_ascii=False, indent=2)
-
-    translated_data = await fast_translate_json(
-        raw_data,
-        req["targetLanguage"],
-        req["brandTone"]
-    )
+    # with open(file_path, "w", encoding="utf-8") as f:
+    #     json.dump(raw_data, f, ensure_ascii=False, indent=2)
 
     # Save translated JSON to file
     file_name = f"translated_{uuid.uuid4().hex}.json"
