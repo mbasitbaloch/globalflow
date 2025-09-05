@@ -7,7 +7,7 @@ import uuid
 from openai import AsyncOpenAI
 # import google.generativeai as genai  # Gemini SDK
 from google import genai
-from google.genai import types
+# from google.genai import types
 
 
 openai_client = AsyncOpenAI(
@@ -60,6 +60,10 @@ def is_translateable(text: str) -> bool:
     if text.startswith("shopify."):
         return False
     if text.startswith("customer."):
+        return False
+    if text.startswith("customer_"):
+        return False
+    if text.startswith("templates."):
         return False
     return True
 
@@ -167,15 +171,8 @@ async def fast_translate_json(data, target_lang, brand_tone):
         return data
     print("data into fullData is:", target_data)
 
-        # Save translated JSON to file
-    file_name = f"fullData{uuid.uuid4().hex}.json"
-    file_path = os.path.join("fullData", file_name)
-    os.makedirs("fullData", exist_ok=True)
-
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(target_data, f, ensure_ascii=False, indent=2)
-
     # Step 1: collect translateable strings with their positions
+
     def collect_strings(d, path=None):
         if path is None:
             path = []
@@ -190,9 +187,6 @@ async def fast_translate_json(data, target_lang, brand_tone):
                 collect_strings(item, path + [i])
 
     collect_strings(target_data)
-
-
-
 
     unique_strings = list({s for _, s in positions})
     print(f"Total unique translateable strings: {len(unique_strings)}")
@@ -227,7 +221,8 @@ async def fast_translate_json(data, target_lang, brand_tone):
 
     print(
         f"✅ Translation completed: {len(string_map)}/{len(unique_strings)} unique strings translated")
-    return data
+    # return data
+    return target_data
 
 
 # ------updated code of translator.py on 9-4-2025-------
