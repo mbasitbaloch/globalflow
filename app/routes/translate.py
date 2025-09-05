@@ -54,8 +54,8 @@ if COLLECTION_NAME:
 
 @router.post("/shopify/translate")
 async def shopify_translate(req: dict, db: Session = Depends(get_db)):
-    today_date = datetime.now().strftime("%Y-%m-%d")
-    today_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # today_date = datetime.now().strftime("%Y-%m-%d")
+    today_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     """
     Expect body:
     {
@@ -118,7 +118,7 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         translated_text=translated_data,
         target_lang=req["targetLanguage"],
         content_type="json",
-        translated_at=today_time
+        translated_at=today_date
     )
     db.add(newObj)
     db.commit()
