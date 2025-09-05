@@ -145,7 +145,41 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         filename=file_name
     )
 
+    # return {"translated_json": translated_data}
 
+
+# 2 Generic JSON translator (returns JSON in response)
+@router.post("/translate-json")
+async def translate_json(
+    payload: dict = Body(...),
+    target_lang: str = "fr",
+    brand_tone: str = "neutral"
+):
+    translated = await fast_translate_json(payload, target_lang, brand_tone)
+    return JSONResponse(content=translated)
+
+
+# 3 JSON translator (returns downloadable file)
+@router.post("/translate-json/download")
+async def translate_json_download(
+    payload: dict = Body(...),
+    target_lang: str = "fr",
+    brand_tone: str = "neutral"
+):
+    translated = await fast_translate_json(payload, target_lang, brand_tone)
+
+    filename = f"translated_{uuid.uuid4().hex}.json"
+    filepath = os.path.join("tmp", filename)
+    os.makedirs("tmp", exist_ok=True)
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(translated, f, ensure_ascii=False, indent=2)
+
+    return FileResponse(
+        filepath,
+        filename=filename,
+        media_type="application/json"
+    )
 
 
 # from fastapi import APIRouter, Depends
