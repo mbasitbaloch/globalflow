@@ -80,37 +80,37 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         req["brandTone"]
     )
 
-    json_blob = json.dumps(translated_data, ensure_ascii=False)
+    # json_blob = json.dumps(translated_data, ensure_ascii=False)
 
-    response = client.embeddings.create(
-        model="text-embedding-3-small",
-        input=json_blob
-    )
+    # response = client.embeddings.create(
+    #     model="text-embedding-3-small",
+    #     input=json_blob
+    # )
 
-    embedding = response.data[0].embedding  # <-- correct way
+    # embedding = response.data[0].embedding  # <-- correct way
 
-    translation_point = PointStruct(
-        id=str(uuid.uuid4()),
-        vector=embedding,
-        payload={
-            "shopDomain": req["shopDomain"],
-            "targetLanguage": req["targetLanguage"],
-            "translated_text": translated_data,
-            "brandTone": req["brandTone"],
-            "date": today_date
-        }
-    )
+    # translation_point = PointStruct(
+    #     id=str(uuid.uuid4()),
+    #     vector=embedding,
+    #     payload={
+    #         "shopDomain": req["shopDomain"],
+    #         "targetLanguage": req["targetLanguage"],
+    #         "translated_text": translated_data,
+    #         "brandTone": req["brandTone"],
+    #         "date": today_date
+    #     }
+    # )
 
-    if COLLECTION_NAME is None:
-        raise ValueError("COLLECTION_NAME environment variable is not set.")
-    qdrant.upsert(
-        collection_name=COLLECTION_NAME,
-        points=[translation_point]
-    )
-    count = qdrant.count(
-        collection_name=COLLECTION_NAME,
-        exact=True
-    )
+    # if COLLECTION_NAME is None:
+    #     raise ValueError("COLLECTION_NAME environment variable is not set.")
+    # qdrant.upsert(
+    #     collection_name=COLLECTION_NAME,
+    #     points=[translation_point]
+    # )
+    # count = qdrant.count(
+    #     collection_name=COLLECTION_NAME,
+    #     exact=True
+    # )
 
     newObj = Translation(
         source_text=raw_data,
@@ -130,12 +130,6 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(raw_data, f, ensure_ascii=False, indent=2)
 
-    translated_data = await fast_translate_json(
-        raw_data,
-        req["targetLanguage"],
-        req["brandTone"]
-    )
-
     # Save translated JSON to file
     file_name = f"translated_{uuid.uuid4().hex}.json"
     file_path = os.path.join("tmp", file_name)
@@ -151,41 +145,7 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         filename=file_name
     )
 
-    # return {"translated_json": translated_data}
 
-
-# 2 Generic JSON translator (returns JSON in response)
-@router.post("/translate-json")
-async def translate_json(
-    payload: dict = Body(...),
-    target_lang: str = "fr",
-    brand_tone: str = "neutral"
-):
-    translated = await fast_translate_json(payload, target_lang, brand_tone)
-    return JSONResponse(content=translated)
-
-
-# 3 JSON translator (returns downloadable file)
-@router.post("/translate-json/download")
-async def translate_json_download(
-    payload: dict = Body(...),
-    target_lang: str = "fr",
-    brand_tone: str = "neutral"
-):
-    translated = await fast_translate_json(payload, target_lang, brand_tone)
-
-    filename = f"translated_{uuid.uuid4().hex}.json"
-    filepath = os.path.join("tmp", filename)
-    os.makedirs("tmp", exist_ok=True)
-
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(translated, f, ensure_ascii=False, indent=2)
-
-    return FileResponse(
-        filepath,
-        filename=filename,
-        media_type="application/json"
-    )
 
 
 # from fastapi import APIRouter, Depends

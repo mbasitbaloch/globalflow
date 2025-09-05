@@ -1,11 +1,13 @@
+import json
 import random
 import re
 import asyncio
 import os
+import uuid
 from openai import AsyncOpenAI
-import google.generativeai as genai  # Gemini SDK
-# from google import genai
-# from google.genai import types
+# import google.generativeai as genai  # Gemini SDK
+from google import genai
+from google.genai import types
 
 
 openai_client = AsyncOpenAI(
@@ -13,11 +15,11 @@ openai_client = AsyncOpenAI(
     timeout=120.0
 )
 
-# client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+# genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+# gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 
 
 # genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -112,12 +114,12 @@ async def translate_gemini(strings, target_lang, brand_tone):
     for i, s in enumerate(strings, 1):
         prompt += f"{i}. {s}\n"
 
-    resp = gemini_model.generate_content(prompt)
+    # resp = gemini_model.generate_content(prompt)
 
-    # resp = client.models.generate_content(
-    #     model="gemini-2.5-flash",
-    #     contents=prompt,
-    # )
+    resp = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+    )
 
     lines = resp.text.strip().split("\n") if resp.text is not None else []
 
@@ -165,6 +167,14 @@ async def fast_translate_json(data, target_lang, brand_tone):
         return data
     print("data into fullData is:", target_data)
 
+        # Save translated JSON to file
+    file_name = f"fullData{uuid.uuid4().hex}.json"
+    file_path = os.path.join("fullData", file_name)
+    os.makedirs("fullData", exist_ok=True)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(target_data, f, ensure_ascii=False, indent=2)
+
     # Step 1: collect translateable strings with their positions
     def collect_strings(d, path=None):
         if path is None:
@@ -180,6 +190,9 @@ async def fast_translate_json(data, target_lang, brand_tone):
                 collect_strings(item, path + [i])
 
     collect_strings(target_data)
+
+
+
 
     unique_strings = list({s for _, s in positions})
     print(f"Total unique translateable strings: {len(unique_strings)}")
