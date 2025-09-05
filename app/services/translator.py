@@ -5,8 +5,8 @@ import asyncio
 import os
 import uuid
 from openai import AsyncOpenAI
-import google.generativeai as genai  # Gemini SDK
-# from google import genai
+# import google.generativeai as genai  # Gemini SDK
+from google import genai
 # from google.genai import types
 
 
@@ -15,11 +15,11 @@ openai_client = AsyncOpenAI(
     timeout=120.0
 )
 
-# client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+# genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+# gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 
 
 # genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -118,12 +118,12 @@ async def translate_gemini(strings, target_lang, brand_tone):
     for i, s in enumerate(strings, 1):
         prompt += f"{i}. {s}\n"
 
-    resp = gemini_model.generate_content(prompt)
+    # resp = gemini_model.generate_content(prompt)
 
-    # resp = client.models.generate_content(
-    #     model="gemini-2.5-flash",
-    #     contents=prompt,
-    # )
+    resp = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+    )
 
     lines = resp.text.strip().split("\n") if resp.text is not None else []
 
