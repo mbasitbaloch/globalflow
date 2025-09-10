@@ -11,4 +11,5 @@ python-dotenv
 celery
 redis
 google-generativeai    
-pymongo                 
+pymongo
+sentry-sdk[fastapi]

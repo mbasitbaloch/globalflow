@@ -8,7 +8,10 @@ class Translation(Base):
     __tablename__ = "translations"
 
     id = Column(Integer, primary_key=True, index=True)
-    # tenant_id = Column(Integer, nullable=True)
+    user_id = Column(String, nullable=False)
+    industry = Column(String, nullable=False)
+    shop_domain = Column(String, nullable=False)
+    brand_tone = Column(String, nullable=False)
     original_text = Column(JSONB, nullable=False)
     translated_text = Column(JSONB, nullable=False)
     target_lang = Column(String(10), nullable=False)

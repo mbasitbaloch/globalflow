@@ -40,6 +40,7 @@ def user_helper(user) -> dict:
 @router.get("/get_all", response_model=List[User], status_code=status.HTTP_200_OK)
 async def get_all():
     users = users_collection.find({})
+    # return (1 / 0)
     return [user_helper(user) for user in users]
 
 @router.get("/{id}", response_model=User, status_code=status.HTTP_200_OK)

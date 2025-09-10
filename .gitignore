@@ -160,6 +160,7 @@ logs/
 # Temporary files
 temp/
 tmp/
+# fullData/
 
 # JWT secrets (if using)
 jwt-secret.key
@@ -187,3 +188,8 @@ docker-compose.yml
 
 # Windows
 [Tt]humbs.db
+
+# Hassan
+app/hs_main.py
+app/services/hs_celery.py
+app/routes/hs_users.py

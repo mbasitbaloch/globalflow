@@ -4,15 +4,17 @@ import requests
 from ..database import SessionLocal
 from ..models import Translation
 from ..services.translator import fast_translate_json
+# from ..mongodb import users_collection
 from fastapi.responses import JSONResponse, FileResponse
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny, PointStruct, VectorParams, Distance
 import json
 import os
 import uuid
+from bson import ObjectId
 from dotenv import load_dotenv
 from openai import OpenAI
-from datetime import datetime
+from ..utils.tasks import store_data
 # from langchain.embeddings import GoogleGenerativeAIEmbeddings
 # import google.generativeai as genai
 
@@ -21,41 +23,31 @@ COLLECTION_NAME = os.getenv("COLLECTION_NAME")
 
 router = APIRouter()
 
+# client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-qdrant = QdrantClient(
-    url=os.getenv("QDRANT_URL"),
-    api_key=os.getenv("QDRANT_API_KEY"),
-    prefer_grpc=False,
-    timeout=60
-)
-collection_exists = False
-if COLLECTION_NAME:
-    collection_exists = qdrant.collection_exists(COLLECTION_NAME)
-    if not collection_exists:
-        qdrant.create_collection(
-            collection_name=COLLECTION_NAME,
-            vectors_config=VectorParams(
-                size=768,
-                distance=Distance.COSINE
-            ),
-        )
+# qdrant = QdrantClient(
+#     url=os.getenv("QDRANT_URL"),
+#     api_key=os.getenv("QDRANT_API_KEY"),
+#     prefer_grpc=False,
+#     timeout=60
+# )
+# collection_exists = False
+# if COLLECTION_NAME:
+#     collection_exists = qdrant.collection_exists(COLLECTION_NAME)
+#     if not collection_exists:
+#         qdrant.create_collection(
+#             collection_name=COLLECTION_NAME,
+#             vectors_config=VectorParams(
+#                 size=768,
+#                 distance=Distance.COSINE
+#             ),
+#         )
 
 
+
+# @celery_app.task()
 @router.post("/shopify/translate")
-async def shopify_translate(req: dict, db: Session = Depends(get_db)):
-    # today_date = datetime.now().strftime("%Y-%m-%d")
-    today_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+async def shopify_translate(req: dict):
     """
     Expect body:
     {
@@ -80,6 +72,10 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         req["targetLanguage"],
         req["brandTone"]
     )
+    
+    print("Celery task started...")
+    task = store_data.delay(translated_data, req, raw_data) # type: ignore
+    print(f"New task ID: {task.id}")
 
     # json_blob = json.dumps(translated_data, ensure_ascii=False)
 
@@ -113,16 +109,22 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
     #     exact=True
     # )
 
-    newObj = Translation(
-        original_text=raw_data,
-        translated_text=translated_data,
-        target_lang=req["targetLanguage"],
-        content_type="json",
-        translated_at=today_date
-    )
-    db.add(newObj)
-    db.commit()
-    db.refresh(newObj)
+    # user = users_collection.find_one({"shopifyStores.shopDomain": req["shopDomain"]})
+
+    # newObj = Translation(
+    #     user_id=ObjectId(user["_id"]) if user else None,
+    #     industry=user.get("industry") if user else "Unknown",
+    #     shop_domain=req["shopDomain"],
+    #     brand_tone=req["brandTone"],
+    #     original_text=raw_data,
+    #     translated_text=translated_data,
+    #     target_lang=req["targetLanguage"],
+    #     content_type="json",
+    #     translated_at=today_date
+    # )
+    # db.add(newObj)
+    # db.commit()
+    # db.refresh(newObj)
 
     # # Save translated JSON to file
     # file_name = f"translated_{uuid.uuid4().hex}.json"
