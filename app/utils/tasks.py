@@ -1,4 +1,5 @@
-import json, uuid
+import json
+import uuid
 from celery import Celery
 from qdrant_client.http.models import PointStruct, VectorParams, Distance
 from ..config import settings
@@ -16,6 +17,7 @@ celery_app = Celery(
 )
 
 COLLECTION_NAME = settings.COLLECTION_NAME
+
 
 @celery_app.task()
 def store_data(translated_data, req, raw_data):

@@ -5,6 +5,11 @@ sqlalchemy
 alembic             
 qdrant-client
 langchain
+langchain-community==0.3.25
+langchain-core==0.3.65
+langchain-google-genai==2.1.5
+langchain-qdrant==0.2.0
+langchain-text-splitters==0.3.8
 openai
 pydantic
 python-dotenv       

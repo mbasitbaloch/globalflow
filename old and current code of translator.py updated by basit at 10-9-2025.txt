@@ -1,0 +1,221 @@
+import json
+import random
+import re
+import asyncio
+import os
+import uuid
+from openai import AsyncOpenAI
+import google.generativeai as genai  # Gemini SDK
+
+# ==== CLIENTS ====
+
+openai_client = AsyncOpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    timeout=120.0
+)
+
+# Gemini ke 2 alag clients (2 keys ke liye)
+genai.configure(api_key=os.getenv("GEMINI_API_KEY_1"))
+gemini_model_1 = genai.GenerativeModel("gemini-1.5-flash")
+
+genai.configure(api_key=os.getenv("GEMINI_API_KEY_2"))
+gemini_model_2 = genai.GenerativeModel("gemini-1.5-flash")
+
+# ==== CONFIG ====
+BATCH_SIZE = 100
+MAX_CONCURRENCY = 3
+semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+
+# round robin cycle
+model_cycle = ["gemini1", "gemini2", "openai"]
+model_index = 0
+
+
+# ========== FILTER HELPERS ==========
+def is_translateable(text: str) -> bool:
+    """Skip IDs, hashes, timestamps, numbers, placeholders, empty strings"""
+    if not text or not text.strip():
+        return False
+    if text.isdigit():
+        return False
+    if re.match(r"^\d+(\.\d+)?$", text):  # numbers like 129.00
+        return False
+    if re.match(r"^\d{4}-\d{2}-\d{2}T", text):  # ISO timestamps
+        return False
+    if re.match(r"^[a-f0-9]{32,64}$", text):  # hashes
+        return False
+    if text.startswith("gid://"):
+        return False
+    if re.match(r"^\{\{.*\}\}$", text):  # {{placeholders}}
+        return False
+    if "@" in text and "." in text:  # emails
+        return False
+    if re.match(r"^https?://", text):  # URLs
+        return False
+    if text.startswith(("shopify.", "customer.", "customer_", "templates.", "section.", "sections.")):
+        return False
+    return True
+
+
+async def with_retry(fn, *args, retries=3, **kwargs):
+    for i in range(retries):
+        try:
+            return await fn(*args, **kwargs)
+        except Exception as e:
+            if "Rate limit" in str(e) or "quota" in str(e).lower():
+                wait = (2 ** i) + random.random()
+                print(f"⚠ Rate limit, retrying in {wait:.2f}s...")
+                await asyncio.sleep(wait)
+            else:
+                print(f"⚠ Error: {e}, retrying...")
+                await asyncio.sleep(2)
+    raise Exception("Max retries reached")
+
+
+# ==== TRANSLATION FUNCTIONS ====
+async def translate_openai(strings, target_lang, brand_tone):
+    prompt = f"""
+    Translate the following {len(strings)} strings into {target_lang}.
+    Maintain the brand tone as '{brand_tone}'.
+    ⚠ If a string contains HTML tags (<p>, <div>, <br>, etc.), keep the tags exactly as they are,
+    and only translate the inner text.
+    Return ONLY translations line by line, same order:
+    """
+    for i, s in enumerate(strings, 1):
+        prompt += f"{i}. {s}\n"
+
+    resp = await openai_client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+    )
+    content = resp.choices[0].message.content
+    if not content:
+        return []
+    return [line.strip() for line in content.strip().split("\n") if line.strip()]
+
+
+async def _translate_with_gemini(strings, target_lang, brand_tone, model):
+    prompt = f"""
+    Translate the following {len(strings)} strings into {target_lang}.
+    Maintain the brand tone as '{brand_tone}'.
+    ⚠ If a string contains HTML tags (<p>, <div>, <br>, etc.), keep the tags exactly as they are,
+    and only translate the inner text.
+    Return ONLY translations line by line, same order:
+    """
+    for i, s in enumerate(strings, 1):
+        prompt += f"{i}. {s}\n"
+
+    resp = model.generate_content(prompt)
+    lines = resp.text.strip().split("\n") if resp.text else []
+    return [line.strip() for line in lines if line.strip()]
+
+
+async def translate_gemini_1(strings, target_lang, brand_tone):
+    return await _translate_with_gemini(strings, target_lang, brand_tone, gemini_model_1)
+
+
+async def translate_gemini_2(strings, target_lang, brand_tone):
+    return await _translate_with_gemini(strings, target_lang, brand_tone, gemini_model_2)
+
+
+# ==== BATCH HANDLER ====
+async def _translate_batch(strings, target_lang, brand_tone, batch_num, total_batches):
+    global model_index
+    async with semaphore:
+        print(f"\n[DEBUG] Batch {batch_num}/{total_batches} using {len(strings)} strings")
+        for i, s in enumerate(strings[:3], 1):  # show sample
+            print(f"   {i}. {s[:120]}")
+
+        current_model = model_cycle[model_index % len(model_cycle)]
+        model_index += 1
+
+        try:
+            if current_model == "openai":
+                result = await with_retry(translate_openai, strings, target_lang, brand_tone)
+            elif current_model == "gemini1":
+                result = await with_retry(translate_gemini_1, strings, target_lang, brand_tone)
+            else:
+                result = await with_retry(translate_gemini_2, strings, target_lang, brand_tone)
+        except Exception as e:
+            print(f"⚠ {current_model} failed, falling back: {e}")
+            # try other providers
+            for alt in model_cycle:
+                if alt == current_model:
+                    continue
+                try:
+                    if alt == "openai":
+                        result = await translate_openai(strings, target_lang, brand_tone)
+                    elif alt == "gemini1":
+                        result = await translate_gemini_1(strings, target_lang, brand_tone)
+                    else:
+                        result = await translate_gemini_2(strings, target_lang, brand_tone)
+                    break
+                except Exception as e2:
+                    print(f"⚠ Fallback {alt} also failed: {e2}")
+            else:
+                raise Exception("All providers failed!")
+
+        print(f"[✔] Completed batch {batch_num}/{total_batches} via {current_model}")
+        return result
+
+
+# ==== MAIN TRANSLATOR ====
+async def fast_translate_json(data, target_lang, brand_tone):
+    positions = []  # (path, string, path_str)
+
+    # Restrict to only fullData.storeData
+    if "fullData" in data and "storeData" in data["fullData"]:
+        target_data = data["fullData"]["storeData"]
+    else:
+        print("⚠ No fullData.storeData found, skipping translation.")
+        return data
+    print("data into fullData is:", target_data)
+
+    # Step 1: collect translateable strings with their paths
+    def collect_strings(d, path=None):
+        if path is None:
+            path = []
+        if isinstance(d, str):
+            if is_translateable(d):
+                path_str = ".".join(str(p) if isinstance(p, str) else f"[{p}]" for p in path)
+                positions.append((path, d, path_str))
+        elif isinstance(d, dict):
+            for k, v in d.items():
+                collect_strings(v, path + [k])
+        elif isinstance(d, list):
+            for i, item in enumerate(d):
+                collect_strings(item, path + [i])
+
+    collect_strings(target_data)
+
+    strings_to_translate = [s for _, s, _ in positions]
+    print(f"Total translateable strings: {len(strings_to_translate)}")
+
+    # Step 2: batching
+    batches = [strings_to_translate[i:i+BATCH_SIZE] for i in range(0, len(strings_to_translate), BATCH_SIZE)]
+    total_batches = len(batches)
+
+    tasks = [
+        _translate_batch(batch, target_lang, brand_tone, idx+1, total_batches)
+        for idx, batch in enumerate(batches)
+    ]
+    batch_results = await asyncio.gather(*tasks)
+
+    # Step 3: inject back into JSON
+    def set_value(d, path, value):
+        ref = d
+        for p in path[:-1]:
+            ref = ref[p]
+        ref[path[-1]] = value
+
+    string_index = 0
+    for batch, result in zip(batches, batch_results):
+        for orig, translated in zip(batch, result):
+            path, _, path_str = positions[string_index]
+            set_value(target_data, path, translated.strip())
+            print(f"[INJECT] {path_str} -> {translated[:60]}")
+            string_index += 1
+
+    print(f"✅ Translation completed: {string_index}/{len(strings_to_translate)} strings injected")
+    return target_data

@@ -3,7 +3,8 @@ import random
 import re
 import asyncio
 import os
-import uuid
+import sys
+from datetime import datetime
 from openai import AsyncOpenAI
 from google import genai
 from . import hs_langchain
@@ -15,18 +16,27 @@ from pydantic import SecretStr
 # import google.generativeai as genai  # Gemini SDK
 # from google.genai import types
 
+# ==== CLIENTS ====
+# openai_client = AsyncOpenAI(
+#     api_key=os.getenv("OPENAI_API_KEY"),
+#     timeout=120.0
+# )
 
-openai_client = AsyncOpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    timeout=120.0
+# client = genai.Client(api_key=os.getenv("GEMINI_API_KEY_1"))
+
+genai_llm_1 = GoogleGenerativeAI(
+    model="gemini-2.0-flash",
+    api_key=settings.GEMINI_API_KEY_1,
+    temperature=0.7,
+    top_k=50,
+    top_p=0.99,
+    max_output_tokens=65535,
 )
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-genai_llm = GoogleGenerativeAI(
+genai_llm_2 = GoogleGenerativeAI(
     model="gemini-2.0-flash",
-    api_key=settings.GEMINI_API_KEY,
-    temperature=0.95,
+    api_key=settings.GEMINI_API_KEY_2,
+    temperature=0.7,
     top_k=50,
     top_p=0.99,
     max_output_tokens=65535,
@@ -35,7 +45,7 @@ genai_llm = GoogleGenerativeAI(
 openai_llm = OpenAI(
     model="gpt-4o",
     api_key=SecretStr(settings.OPENAI_API_KEY),
-    temperature=0.95,
+    temperature=0.7,
     top_p=0.99,
     max_tokens=65535,
 )
@@ -51,51 +61,51 @@ qdrant = QdrantClient(
 # genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 # gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 
-
-# genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-# gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+# genai.configure(api_key=os.getenv("GEMINI_API_KEY_2"))
+# gemini_model_2 = genai.GenerativeModel("gemini-1.5-flash")
 
 # ==== CONFIG ====
-BATCH_SIZE = 100
+BATCH_SIZE = 50
 MAX_CONCURRENCY = 3
 semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
-# round-robin
-model_cycle = ["openai", "gemini"]
+model_cycle = ["gemini1", "gemini2", "openai"]
 model_index = 0
 
-# ========== FILTER HELPERS ==========
+sys.setrecursionlimit(3000)
+
+# ==== LOG DIR ====
+LOG_DIR = "logs"
+os.makedirs(LOG_DIR, exist_ok=True)
 
 
+# ===================== HELPERS =====================
 def is_translateable(text: str) -> bool:
-    """Skip IDs, hashes, timestamps, numbers, placeholders, empty strings"""
     if not text or not text.strip():
         return False
     if text.isdigit():
         return False
-    if re.match(r"^\d+(\.\d+)?$", text):  # numbers like 129.00
+    if re.match(r"^\d+(\.\d+)?$", text):
         return False
-    if re.match(r"^\d{4}-\d{2}-\d{2}T", text):  # ISO timestamps
+    if re.match(r"^\d{4}-\d{2}-\d{2}T", text):
         return False
-    if re.match(r"^[a-f0-9]{32,64}$", text):  # hashes
+    if re.match(r"^[a-f0-9]{32,64}$", text):
         return False
     if text.startswith("gid://"):
         return False
-    if re.match(r"^\{\{.*\}\}$", text):  # {{placeholders}}
+    if re.match(r"^\{\{.*\}\}$", text):
         return False
-    if "@" in text and "." in text:  # emails
+    if "@" in text and "." in text:
         return False
-    if re.match(r"^https?://", text):  # URLs
+    if re.match(r"^https?://", text):
         return False
-    if text.startswith("shopify."):
-        return False
-    if text.startswith("customer."):
-        return False
-    if text.startswith("customer_"):
-        return False
-    if text.startswith("templates."):
+    if text.startswith(("shopify.", "customer.", "customer_", "templates.", "section.", "sections.")):
         return False
     return True
+
+
+def clean_line(line: str) -> str:
+    return re.sub(r'^\d+[\.\)]\s*', '', line).strip()
 
 
 async def with_retry(fn, *args, retries=3, **kwargs):
@@ -113,7 +123,7 @@ async def with_retry(fn, *args, retries=3, **kwargs):
     raise Exception("Max retries reached")
 
 
-# ==== TRANSLATION FUNCTIONS ====
+# ===================== TRANSLATION FUNCTIONS =====================
 async def translate_openai(strings, shopDomain, target_lang, brand_tone):
     query = hs_langchain.TranslationQuery(
         shopDomain=shopDomain,
@@ -124,30 +134,13 @@ async def translate_openai(strings, shopDomain, target_lang, brand_tone):
 
     content = hs_langchain.fewshotPrompt(openai_llm, qdrant, query)
 
-    # prompt = f"""
-    # Translate the following {len(strings)} strings into {target_lang}.
-    # Maintain the brand tone as '{brand_tone}'.
-    # ⚠ If a string contains HTML tags (<p>, <div>, <br>, etc.), keep the tags exactly as they are, 
-    # and only translate the inner text.
-    # Return ONLY translations line by line, same order:
-    # """
-    # for i, s in enumerate(strings, 1):
-    #     prompt += f"{i}. {s}\n"
-
-    # resp = await openai_client.chat.completions.create(
-    #     model="gpt-4.1-mini",
-    #     messages=[{"role": "user", "content": prompt}],
-    #     temperature=0.7,
-    # )
-
-    # content = resp.choices[0].message.content
-    if content is None:
-        return []
-    return content.strip().split("\n")
+    try:
+        return [clean_line(x) for x in json.loads(content)]
+    except Exception:
+        return [clean_line(line) for line in content.split("\n") if line.strip()]
 
 
-async def translate_gemini(strings, shopDomain, target_lang, brand_tone):
-    
+async def _translate_with_gemini(strings, shopDomain, target_lang, brand_tone, gemini_llm):
     query = hs_langchain.TranslationQuery(
         shopDomain=shopDomain,
         input=strings,
@@ -155,127 +148,168 @@ async def translate_gemini(strings, shopDomain, target_lang, brand_tone):
         brandTone=brand_tone
     )
 
-    content = hs_langchain.fewshotPrompt(openai_llm, qdrant, query)
+    content = hs_langchain.fewshotPrompt(gemini_llm, qdrant, query)
 
-    # prompt = f"""
-    # Translate the following {len(strings)} strings into {target_lang}.
-    # Maintain the brand tone as '{brand_tone}'.
-    # ⚠ If a string contains HTML tags (<p>, <div>, <br>, etc.), keep the tags exactly as they are,
-    # and only translate the inner text.
-    # Return ONLY translations line by line, same order:
-    # """
-    # for i, s in enumerate(strings, 1):
-    #     prompt += f"{i}. {s}\n"
-
-    # # resp = gemini_model.generate_content(prompt)
-
-    # resp = client.models.generate_content(
-    #     model="gemini-2.5-flash",
-    #     contents=prompt,
-    # )
-
-    lines = content.strip().split("\n") if content is not None else []
-
-    return [line.strip() for line in lines if line.strip()]
+    try:
+        return [clean_line(x) for x in json.loads(content)]
+    except Exception:
+        return [clean_line(line) for line in content.split("\n") if line.strip()]
 
 
+async def translate_gemini_1(strings, shopDomain, target_lang, brand_tone):
+    return await _translate_with_gemini(strings, shopDomain, target_lang, brand_tone, genai_llm_1)
+
+
+async def translate_gemini_2(strings, shopDomain, target_lang, brand_tone):
+    return await _translate_with_gemini(strings, shopDomain, target_lang, brand_tone, genai_llm_2)
+
+
+# ===================== BATCH HANDLER =====================
 async def _translate_batch(strings, shopDomain, target_lang, brand_tone, batch_num, total_batches):
     global model_index
     async with semaphore:
         print(
-            f"\n[DEBUG] Batch {batch_num}/{total_batches} using {len(strings)} strings")
-        for i, s in enumerate(strings[:5], 1):
-            print(f"   {i}. {s[:120]}")
-
+            f"\n[DEBUG] Batch {batch_num}/{total_batches} → {len(strings)} strings")
         current_model = model_cycle[model_index % len(model_cycle)]
         model_index += 1
 
         try:
             if current_model == "openai":
                 result = await with_retry(translate_openai, strings, shopDomain, target_lang, brand_tone)
+            elif current_model == "gemini1":
+                result = await with_retry(translate_gemini_1, strings, shopDomain, target_lang, brand_tone)
             else:
-                result = await with_retry(translate_gemini, strings, shopDomain, target_lang, brand_tone)
+                result = await with_retry(translate_gemini_2, strings, shopDomain, target_lang, brand_tone)
         except Exception as e:
             print(f"⚠ {current_model} failed, falling back: {e}")
-            if current_model == "openai":
-                result = await translate_gemini(strings, shopDomain, target_lang, brand_tone)
+            for alt in model_cycle:
+                if alt == current_model:
+                    continue
+                try:
+                    if alt == "openai":
+                        result = await translate_openai(strings, shopDomain, target_lang, brand_tone)
+                    elif alt == "gemini1":
+                        result = await translate_gemini_1(strings, shopDomain, target_lang, brand_tone)
+                    else:
+                        result = await translate_gemini_2(strings, shopDomain, target_lang, brand_tone)
+                    break
+                except Exception as e2:
+                    print(f"⚠ Fallback {alt} also failed: {e2}")
             else:
-                result = await translate_openai(strings, shopDomain, target_lang, brand_tone)
+                raise Exception("All providers failed!")
 
         print(
             f"[✔] Completed batch {batch_num}/{total_batches} via {current_model}")
         return result
 
 
-# ==== MAIN JSON TRANSLATOR ====
+# ===================== MAIN TRANSLATOR =====================
 async def fast_translate_json(data, shopDomain, target_lang, brand_tone):
-    string_map = {}
-    positions = []
+    positions = []  # (path, string, path_str)
 
-    # Restrict to only fullData.storeData
     if "fullData" in data and "storeData" in data["fullData"]:
         target_data = data["fullData"]["storeData"]
     else:
-        print("⚠ No fullData.storeData found, skipping translation.")
+        print("⚠ No fullData.storeData found")
         return data
-    print("data into fullData is:", target_data)
 
-    # Save translated JSON to file
-    file_name = f"fullData{uuid.uuid4().hex}.json"
-    file_path = os.path.join("fullData", file_name)
-    os.makedirs("fullData", exist_ok=True)
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(target_data, f, ensure_ascii=False, indent=2)
-
-    # Step 1: collect translateable strings with their positions
-
-    def collect_strings(d, path=None):
+    # ---------- CUSTOM COLLECTION RULES ----------
+    def collect_strings(d, path=None, parent_key=None):
         if path is None:
             path = []
-        if isinstance(d, str):
-            if is_translateable(d):
-                positions.append((path, d))
-        elif isinstance(d, dict):
+
+        if isinstance(d, dict):
             for k, v in d.items():
-                collect_strings(v, path + [k])
+                # PRODUCTS
+                if parent_key == "products" and k in ["title", "descriptionHtml", "productType", "vendor", "status"]:
+                    if isinstance(v, str) and is_translateable(v):
+                        positions.append(
+                            (path + [k], v, ".".join(map(str, path + [k]))))
+                # VARIANTS
+                elif parent_key == "variants" and k == "title":
+                    if isinstance(v, str) and is_translateable(v):
+                        positions.append(
+                            (path + [k], v, ".".join(map(str, path + [k]))))
+                # COLLECTIONS
+                elif parent_key == "collections" and k in ["title", "descriptionHtml", "handle"]:
+                    if isinstance(v, str) and is_translateable(v):
+                        positions.append(
+                            (path + [k], v, ".".join(map(str, path + [k]))))
+                # BLOGS
+                elif parent_key == "blogs" and k in ["title", "handle"]:
+                    if isinstance(v, str) and is_translateable(v):
+                        positions.append(
+                            (path + [k], v, ".".join(map(str, path + [k]))))
+                # onlineStoreThemes, menus, links, shopPolicies
+                elif k == "translatableContent" and isinstance(v, list):
+                    for i, item in enumerate(v):
+                        if isinstance(item, dict) and "value" in item:
+                            val = item["value"]
+                            if isinstance(val, str) and is_translateable(val):
+                                positions.append(
+                                    (path + [k, i, "value"], val, ".".join(map(str, path + [k, i, "value"]))))
+                else:
+                    collect_strings(v, path + [k], k)
+
         elif isinstance(d, list):
             for i, item in enumerate(d):
-                collect_strings(item, path + [i])
+                collect_strings(item, path + [i], parent_key)
 
     collect_strings(target_data)
 
-    unique_strings = list({s for _, s in positions})
-    print(f"Total unique translateable strings: {len(unique_strings)}")
+    strings_to_translate = [s for _, s, _ in positions]
+    print(f"Total strings: {len(strings_to_translate)}")
 
-    # Step 2: batch unique strings → translate
-    batches = [unique_strings[i:i+BATCH_SIZE]
-               for i in range(0, len(unique_strings), BATCH_SIZE)]
+    # ---- SAVE EXTRACTED ----
+    extracted_log = [{"path": p, "string": s} for _, s, p in positions]
+    extracted_file = os.path.join(
+        LOG_DIR, f"extracted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    with open(extracted_file, "w", encoding="utf-8") as f:
+        json.dump(extracted_log, f, ensure_ascii=False, indent=2)
+    print(f"Saved extracted strings to {extracted_file}")
+
+    # ---- TRANSLATE ----
+    batches = [strings_to_translate[i:i+BATCH_SIZE]
+               for i in range(0, len(strings_to_translate), BATCH_SIZE)]
     total_batches = len(batches)
 
-    tasks = [
-        _translate_batch(batch, shopDomain, target_lang, brand_tone, idx+1, total_batches)
-        for idx, batch in enumerate(batches)
-    ]
+    tasks = [_translate_batch(batch, shopDomain, target_lang, brand_tone, idx+1, total_batches)
+             for idx, batch in enumerate(batches)]
     batch_results = await asyncio.gather(*tasks)
-    translated_lines = [line.strip()
-                        for batch in batch_results for line in batch if line.strip()]
 
-    # map unique originals → translated
-    for orig, trans in zip(unique_strings, translated_lines):
-        string_map[orig] = trans
-
-    # Step 3: inject back into JSON (using positions)
+    # ---------- INJECTION ----------
     def set_value(d, path, value):
         ref = d
         for p in path[:-1]:
             ref = ref[p]
         ref[path[-1]] = value
 
-    for path, orig in positions:
-        if orig in string_map:
-            set_value(target_data, path, string_map[orig])
+    injected_log = []
+    string_index = 0
+    for batch, result in zip(batches, batch_results):
+        # enforce same length
+        if len(result) != len(batch):
+            print(
+                f"⚠ Length mismatch: batch={len(batch)}, result={len(result)}")
+            # pad missing translations with originals
+            if len(result) < len(batch):
+                result.extend(batch[len(result):])
+            else:
+                result = result[:len(batch)]
 
-    print(
-        f"✅ Translation completed: {len(string_map)}/{len(unique_strings)} unique strings translated")
-    # return data
+        for orig, translated in zip(batch, result):
+            path, orig_val, path_str = positions[string_index]
+            set_value(target_data, path, translated)
+            injected_log.append({"path": path_str, "translated": translated})
+            print(f"[INJECT] {path_str} -> {translated[:60]}")
+            string_index += 1
+
+    # ---- SAVE INJECTED ----
+    injected_file = os.path.join(
+        LOG_DIR, f"injected_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    with open(injected_file, "w", encoding="utf-8") as f:
+        json.dump(injected_log, f, ensure_ascii=False, indent=2)
+    print(f"Saved injected strings to {injected_file}")
+
+    print(f" Injected {string_index}/{len(strings_to_translate)} strings")
     return target_data
