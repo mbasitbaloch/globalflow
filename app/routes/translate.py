@@ -1,5 +1,5 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends, Body
+from fastapi import APIRouter, Depends, Body, HTTPException
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from sqlalchemy.orm import Session
 import requests
@@ -21,6 +21,7 @@ from ..utils.tasks import store_data
 # import google.generativeai as genai
 # from langchain_community.vectorstores.qdrant import Qdrant
 from langchain_qdrant import Qdrant
+from ..config import settings
 
 
 load_dotenv()
@@ -89,3 +90,60 @@ async def shopify_translate(req: dict):
         media_type="application/json",
         filename=file_name
     )
+
+
+@router.put("/shopify/update-string")
+async def update_translated_string(req: dict):
+    """
+    Expect body:
+    {
+      "shopDomain": "...",
+      "targetLanguage": "fr",
+      "path": "products.0.title",   # dot notation path
+      "newValue": "Mon nouveau titre"
+    }
+    """
+    shop_domain = req.get("shopDomain")
+    lang = req.get("targetLanguage")
+    path = req.get("path")
+    new_value = req.get("newValue")
+
+    if not all([shop_domain, lang, path, new_value]):
+        raise HTTPException(
+            status_code=400, detail="Missing fields in request")
+
+    db: Session = SessionLocal()
+    try:
+        # 1. Fetch the latest translation
+        translation = db.query(Translation).filter_by(
+            shop_domain=shop_domain,
+            target_lang=lang
+        ).order_by(Translation.translated_at.desc()).first()
+
+        if not translation:
+            raise HTTPException(status_code=404, detail="No translation found")
+
+        data = translation.translated_text  # already JSON/dict
+
+        # 2. Walk JSON to set new value
+        keys = path.split(".")
+        ref = data
+        for k in keys[:-1]:
+            ref = ref[int(k)] if k.isdigit() else ref[k]
+        ref[keys[-1]] = new_value
+
+        # 3. Save back to Postgres
+        translation.translated_text = data
+        translation.translated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        db.commit()
+        db.refresh(translation)
+
+        return {
+            "status": "ok",
+            "updatedPath": path,
+            "newValue": new_value,
+            "updatedJson": data
+        }
+
+    finally:
+        db.close()

@@ -233,7 +233,7 @@ async def fast_translate_json(data, target_lang, brand_tone):
         LOG_DIR, f"extracted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
     with open(extracted_file, "w", encoding="utf-8") as f:
         json.dump(extracted_log, f, ensure_ascii=False, indent=2)
-    print(f"📂 Saved extracted strings to {extracted_file}")
+    print(f"Saved extracted strings to {extracted_file}")
 
     # ---- TRANSLATE ----
     batches = [strings_to_translate[i:i+BATCH_SIZE]
@@ -276,8 +276,7 @@ async def fast_translate_json(data, target_lang, brand_tone):
         LOG_DIR, f"injected_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
     with open(injected_file, "w", encoding="utf-8") as f:
         json.dump(injected_log, f, ensure_ascii=False, indent=2)
-    print(f"📂 Saved injected strings to {injected_file}")
+    print(f"Saved injected strings to {injected_file}")
 
-    print(f"✅ Injected {string_index}/{len(strings_to_translate)} strings")
+    print(f" Injected {string_index}/{len(strings_to_translate)} strings")
     return target_data
-
