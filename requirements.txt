@@ -13,3 +13,4 @@ redis
 google-generativeai    
 pymongo
 sentry-sdk[fastapi]
+# wsl --install -d ubuntu

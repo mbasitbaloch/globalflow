@@ -69,6 +69,7 @@ async def shopify_translate(req: dict):
 
     translated_data = await fast_translate_json(
         raw_data,
+        req["shopDomain"],
         req["targetLanguage"],
         req["brandTone"]
     )
@@ -76,63 +77,6 @@ async def shopify_translate(req: dict):
     print("Celery task started...")
     task = store_data.delay(translated_data, req, raw_data) # type: ignore
     print(f"New task ID: {task.id}")
-
-    # json_blob = json.dumps(translated_data, ensure_ascii=False)
-
-    # response = client.embeddings.create(
-    #     model="text-embedding-3-small",
-    #     input=json_blob
-    # )
-
-    # embedding = response.data[0].embedding  # <-- correct way
-
-    # translation_point = PointStruct(
-    #     id=str(uuid.uuid4()),
-    #     vector=embedding,
-    #     payload={
-    #         "shopDomain": req["shopDomain"],
-    #         "targetLanguage": req["targetLanguage"],
-    #         "translated_text": translated_data,
-    #         "brandTone": req["brandTone"],
-    #         "date": today_date
-    #     }
-    # )
-
-    # if COLLECTION_NAME is None:
-    #     raise ValueError("COLLECTION_NAME environment variable is not set.")
-    # qdrant.upsert(
-    #     collection_name=COLLECTION_NAME,
-    #     points=[translation_point]
-    # )
-    # count = qdrant.count(
-    #     collection_name=COLLECTION_NAME,
-    #     exact=True
-    # )
-
-    # user = users_collection.find_one({"shopifyStores.shopDomain": req["shopDomain"]})
-
-    # newObj = Translation(
-    #     user_id=ObjectId(user["_id"]) if user else None,
-    #     industry=user.get("industry") if user else "Unknown",
-    #     shop_domain=req["shopDomain"],
-    #     brand_tone=req["brandTone"],
-    #     original_text=raw_data,
-    #     translated_text=translated_data,
-    #     target_lang=req["targetLanguage"],
-    #     content_type="json",
-    #     translated_at=today_date
-    # )
-    # db.add(newObj)
-    # db.commit()
-    # db.refresh(newObj)
-
-    # # Save translated JSON to file
-    # file_name = f"translated_{uuid.uuid4().hex}.json"
-    # file_path = os.path.join("tmp", file_name)
-    # os.makedirs("tmp", exist_ok=True)
-
-    # with open(file_path, "w", encoding="utf-8") as f:
-    #     json.dump(raw_data, f, ensure_ascii=False, indent=2)
 
     # Save translated JSON to file
     file_name = f"translated_{uuid.uuid4().hex}.json"
@@ -143,47 +87,47 @@ async def shopify_translate(req: dict):
         json.dump(translated_data, f, ensure_ascii=False, indent=2)
 
     # Return file for download
-    return FileResponse(
-        file_path,
-        media_type="application/json",
-        filename=file_name
-    )
+    return {
+        "message": "Translation started",
+        "task_id": task.id,
+        "file_path": file_path
+    }
 
     # return {"translated_json": translated_data}
 
 
-# 2 Generic JSON translator (returns JSON in response)
-@router.post("/translate-json")
-async def translate_json(
-    payload: dict = Body(...),
-    target_lang: str = "fr",
-    brand_tone: str = "neutral"
-):
-    translated = await fast_translate_json(payload, target_lang, brand_tone)
-    return JSONResponse(content=translated)
+# # 2 Generic JSON translator (returns JSON in response)
+# @router.post("/translate-json")
+# async def translate_json(
+#     payload: dict = Body(...),
+#     target_lang: str = "fr",
+#     brand_tone: str = "neutral"
+# ):
+#     translated = await fast_translate_json(payload, target_lang, brand_tone)
+#     return JSONResponse(content=translated)
 
 
-# 3 JSON translator (returns downloadable file)
-@router.post("/translate-json/download")
-async def translate_json_download(
-    payload: dict = Body(...),
-    target_lang: str = "fr",
-    brand_tone: str = "neutral"
-):
-    translated = await fast_translate_json(payload, target_lang, brand_tone)
+# # 3 JSON translator (returns downloadable file)
+# @router.post("/translate-json/download")
+# async def translate_json_download(
+#     payload: dict = Body(...),
+#     target_lang: str = "fr",
+#     brand_tone: str = "neutral"
+# ):
+#     translated = await fast_translate_json(payload, target_lang, brand_tone)
 
-    filename = f"translated_{uuid.uuid4().hex}.json"
-    filepath = os.path.join("tmp", filename)
-    os.makedirs("tmp", exist_ok=True)
+#     filename = f"translated_{uuid.uuid4().hex}.json"
+#     filepath = os.path.join("tmp", filename)
+#     os.makedirs("tmp", exist_ok=True)
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(translated, f, ensure_ascii=False, indent=2)
+#     with open(filepath, "w", encoding="utf-8") as f:
+#         json.dump(translated, f, ensure_ascii=False, indent=2)
 
-    return FileResponse(
-        filepath,
-        filename=filename,
-        media_type="application/json"
-    )
+#     return FileResponse(
+#         filepath,
+#         filename=filename,
+#         media_type="application/json"
+#     )
 
 
 # from fastapi import APIRouter, Depends

@@ -5,8 +5,14 @@ import asyncio
 import os
 import uuid
 from openai import AsyncOpenAI
-# import google.generativeai as genai  # Gemini SDK
 from google import genai
+from . import hs_langchain
+from langchain_google_genai import GoogleGenerativeAI
+from langchain_openai import OpenAI
+from qdrant_client import QdrantClient
+from app.config import settings
+from pydantic import SecretStr
+# import google.generativeai as genai  # Gemini SDK
 # from google.genai import types
 
 
@@ -16,6 +22,30 @@ openai_client = AsyncOpenAI(
 )
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+genai_llm = GoogleGenerativeAI(
+    model="gemini-2.0-flash",
+    api_key=settings.GEMINI_API_KEY,
+    temperature=0.95,
+    top_k=50,
+    top_p=0.99,
+    max_output_tokens=65535,
+)
+
+openai_llm = OpenAI(
+    model="gpt-4o",
+    api_key=SecretStr(settings.OPENAI_API_KEY),
+    temperature=0.95,
+    top_p=0.99,
+    max_tokens=65535,
+)
+
+qdrant = QdrantClient(
+    url=settings.QDRANT_URL,
+    api_key=settings.QDRANT_API_KEY,
+    prefer_grpc=False,
+    timeout=60
+)
 
 
 # genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -84,53 +114,72 @@ async def with_retry(fn, *args, retries=3, **kwargs):
 
 
 # ==== TRANSLATION FUNCTIONS ====
-async def translate_openai(strings, target_lang, brand_tone):
-    prompt = f"""
-    Translate the following {len(strings)} strings into {target_lang}.
-    Maintain the brand tone as '{brand_tone}'.
-    ⚠ If a string contains HTML tags (<p>, <div>, <br>, etc.), keep the tags exactly as they are, 
-    and only translate the inner text.
-    Return ONLY translations line by line, same order:
-    """
-    for i, s in enumerate(strings, 1):
-        prompt += f"{i}. {s}\n"
-
-    resp = await openai_client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.7,
+async def translate_openai(strings, shopDomain, target_lang, brand_tone):
+    query = hs_langchain.TranslationQuery(
+        shopDomain=shopDomain,
+        input=strings,
+        targetLanguage=target_lang,
+        brandTone=brand_tone
     )
 
-    content = resp.choices[0].message.content
+    content = hs_langchain.fewshotPrompt(openai_llm, qdrant, query)
+
+    # prompt = f"""
+    # Translate the following {len(strings)} strings into {target_lang}.
+    # Maintain the brand tone as '{brand_tone}'.
+    # ⚠ If a string contains HTML tags (<p>, <div>, <br>, etc.), keep the tags exactly as they are, 
+    # and only translate the inner text.
+    # Return ONLY translations line by line, same order:
+    # """
+    # for i, s in enumerate(strings, 1):
+    #     prompt += f"{i}. {s}\n"
+
+    # resp = await openai_client.chat.completions.create(
+    #     model="gpt-4.1-mini",
+    #     messages=[{"role": "user", "content": prompt}],
+    #     temperature=0.7,
+    # )
+
+    # content = resp.choices[0].message.content
     if content is None:
         return []
     return content.strip().split("\n")
 
 
-async def translate_gemini(strings, target_lang, brand_tone):
-    prompt = f"""
-    Translate the following {len(strings)} strings into {target_lang}.
-    Maintain the brand tone as '{brand_tone}'.
-    ⚠ If a string contains HTML tags (<p>, <div>, <br>, etc.), keep the tags exactly as they are,
-    and only translate the inner text.
-    Return ONLY translations line by line, same order:
-    """
-    for i, s in enumerate(strings, 1):
-        prompt += f"{i}. {s}\n"
-
-    # resp = gemini_model.generate_content(prompt)
-
-    resp = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
+async def translate_gemini(strings, shopDomain, target_lang, brand_tone):
+    
+    query = hs_langchain.TranslationQuery(
+        shopDomain=shopDomain,
+        input=strings,
+        targetLanguage=target_lang,
+        brandTone=brand_tone
     )
 
-    lines = resp.text.strip().split("\n") if resp.text is not None else []
+    content = hs_langchain.fewshotPrompt(openai_llm, qdrant, query)
+
+    # prompt = f"""
+    # Translate the following {len(strings)} strings into {target_lang}.
+    # Maintain the brand tone as '{brand_tone}'.
+    # ⚠ If a string contains HTML tags (<p>, <div>, <br>, etc.), keep the tags exactly as they are,
+    # and only translate the inner text.
+    # Return ONLY translations line by line, same order:
+    # """
+    # for i, s in enumerate(strings, 1):
+    #     prompt += f"{i}. {s}\n"
+
+    # # resp = gemini_model.generate_content(prompt)
+
+    # resp = client.models.generate_content(
+    #     model="gemini-2.5-flash",
+    #     contents=prompt,
+    # )
+
+    lines = content.strip().split("\n") if content is not None else []
 
     return [line.strip() for line in lines if line.strip()]
 
 
-async def _translate_batch(strings, target_lang, brand_tone, batch_num, total_batches):
+async def _translate_batch(strings, shopDomain, target_lang, brand_tone, batch_num, total_batches):
     global model_index
     async with semaphore:
         print(
@@ -143,15 +192,15 @@ async def _translate_batch(strings, target_lang, brand_tone, batch_num, total_ba
 
         try:
             if current_model == "openai":
-                result = await with_retry(translate_openai, strings, target_lang, brand_tone)
+                result = await with_retry(translate_openai, strings, shopDomain, target_lang, brand_tone)
             else:
-                result = await with_retry(translate_gemini, strings, target_lang, brand_tone)
+                result = await with_retry(translate_gemini, strings, shopDomain, target_lang, brand_tone)
         except Exception as e:
             print(f"⚠ {current_model} failed, falling back: {e}")
             if current_model == "openai":
-                result = await translate_gemini(strings, target_lang, brand_tone)
+                result = await translate_gemini(strings, shopDomain, target_lang, brand_tone)
             else:
-                result = await translate_openai(strings, target_lang, brand_tone)
+                result = await translate_openai(strings, shopDomain, target_lang, brand_tone)
 
         print(
             f"[✔] Completed batch {batch_num}/{total_batches} via {current_model}")
@@ -159,7 +208,7 @@ async def _translate_batch(strings, target_lang, brand_tone, batch_num, total_ba
 
 
 # ==== MAIN JSON TRANSLATOR ====
-async def fast_translate_json(data, target_lang, brand_tone):
+async def fast_translate_json(data, shopDomain, target_lang, brand_tone):
     string_map = {}
     positions = []
 
@@ -204,7 +253,7 @@ async def fast_translate_json(data, target_lang, brand_tone):
     total_batches = len(batches)
 
     tasks = [
-        _translate_batch(batch, target_lang, brand_tone, idx+1, total_batches)
+        _translate_batch(batch, shopDomain, target_lang, brand_tone, idx+1, total_batches)
         for idx, batch in enumerate(batches)
     ]
     batch_results = await asyncio.gather(*tasks)
