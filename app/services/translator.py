@@ -6,7 +6,7 @@ import os
 import sys
 from datetime import datetime
 from openai import AsyncOpenAI
-from google import genai
+# from google import genai
 from . import hs_langchain
 from langchain_google_genai import GoogleGenerativeAI
 from langchain_openai import OpenAI
