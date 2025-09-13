@@ -193,3 +193,10 @@ docker-compose.yml
 app/hs_main.py
 app/services/hs_celery.py
 app/routes/hs_users.py
+extracted_paths.json
+injected_paths.json
+old and current code of translator.py updated by basit at 10-9-2025.txt
+fullData
+fetched_data
+result
+app/services/translator1.py

@@ -11,7 +11,7 @@ from ..database import SessionLocal
 from ..mongodb import users_collection
 
 celery_app = Celery(
-    'tasks',
+    __name__,
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND
 )
