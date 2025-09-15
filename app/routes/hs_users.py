@@ -34,7 +34,8 @@ def user_helper(user) -> dict:
         "shopifyStores" : user.get("shopifyStores", []),
         "createdAt" : user.get("createdAt"),
         "updatedAt" : user.get("updatedAt"),
-        "__v" : user.get("__v")
+        "__v" : user.get("__v"),
+        "country" : user.get("country", None)
     }
 
 @router.get("/get_all", response_model=List[User], status_code=status.HTTP_200_OK)

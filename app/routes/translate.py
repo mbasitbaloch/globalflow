@@ -1,31 +1,32 @@
 from datetime import datetime
 from fastapi import APIRouter, Depends, Body, HTTPException
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from sqlalchemy.orm import Session
+# from langchain_google_genai import GoogleGenerativeAIEmbeddings
+# from sqlalchemy.orm import Session
 import requests
 from ..database import SessionLocal
-from ..models import Translation
+# from ..models import Translation
 from ..services.translator import fast_translate_json
 # from ..mongodb import users_collection
-from fastapi.responses import JSONResponse, FileResponse
-from qdrant_client import QdrantClient
-from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny, PointStruct, VectorParams, Distance
+# from fastapi.responses import JSONResponse, FileResponse
+# from qdrant_client import QdrantClient
+# from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny, PointStruct, VectorParams, Distance
 import json
 import os
 import uuid
-from bson import ObjectId
+# from bson import ObjectId
 from dotenv import load_dotenv
-from openai import OpenAI
+# from openai import OpenAI
 from ..utils.tasks import store_data
 # from langchain.embeddings import GoogleGenerativeAIEmbeddings
 # import google.generativeai as genai
 # from langchain_community.vectorstores.qdrant import Qdrant
-from langchain_qdrant import Qdrant
+# from langchain_qdrant import Qdrant
 from ..config import settings
+from ..mongodb import users_collection
 
 
 load_dotenv()
-COLLECTION_NAME = os.getenv("COLLECTION_NAME")
+COLLECTION_NAME = settings.COLLECTION_NAME
 
 router = APIRouter()
 
@@ -41,9 +42,12 @@ async def shopify_translate(req: dict):
       "shopDomain": "...",
       "accessToken": "...",
       "targetLanguage": "fr",
-      "brandTone": "neutral"
+      "brandTone": "neutral",
     }
     """
+    user = users_collection.find_one({"shopifyStores.shopDomain": req["shopDomain"]})
+    if not user:
+        raise HTTPException(status_code=404, detail="Shop not found")
     url = "https://stagingapi.globalflow.ai/api/shopify/unauth/get-all-store-data"
     response = requests.post(url, json={
         "shopDomain": req["shopDomain"],
@@ -67,7 +71,8 @@ async def shopify_translate(req: dict):
         raw_data,
         req["shopDomain"],
         req["targetLanguage"],
-        req["brandTone"]
+        req["brandTone"],
+        user.get("region", None)
     )
 
     print("Celery task started...")
