@@ -5,7 +5,7 @@ import asyncio
 import os
 import sys
 from datetime import datetime
-from openai import AsyncOpenAI
+# from openai import AsyncOpenAI
 # from google import genai
 from . import hs_langchain
 from langchain_google_genai import GoogleGenerativeAI
@@ -124,12 +124,13 @@ async def with_retry(fn, *args, retries=3, **kwargs):
 
 
 # ===================== TRANSLATION FUNCTIONS =====================
-async def translate_openai(strings, shopDomain, target_lang, brand_tone):
+async def translate_openai(strings, shopDomain, target_lang, brand_tone, region):
     query = hs_langchain.TranslationQuery(
         shopDomain=shopDomain,
         input=strings,
         targetLanguage=target_lang,
-        brandTone=brand_tone
+        brandTone=brand_tone,
+        region=region
     )
 
     content = hs_langchain.fewshotPrompt(openai_llm, qdrant, query)
@@ -140,12 +141,13 @@ async def translate_openai(strings, shopDomain, target_lang, brand_tone):
         return [clean_line(line) for line in content.split("\n") if line.strip()]
 
 
-async def _translate_with_gemini(strings, shopDomain, target_lang, brand_tone, gemini_llm):
+async def _translate_with_gemini(strings, shopDomain, target_lang, brand_tone, region, gemini_llm):
     query = hs_langchain.TranslationQuery(
         shopDomain=shopDomain,
         input=strings,
         targetLanguage=target_lang,
-        brandTone=brand_tone
+        brandTone=brand_tone,
+        region=region
     )
 
     content = hs_langchain.fewshotPrompt(gemini_llm, qdrant, query)
@@ -156,16 +158,16 @@ async def _translate_with_gemini(strings, shopDomain, target_lang, brand_tone, g
         return [clean_line(line) for line in content.split("\n") if line.strip()]
 
 
-async def translate_gemini_1(strings, shopDomain, target_lang, brand_tone):
-    return await _translate_with_gemini(strings, shopDomain, target_lang, brand_tone, genai_llm_1)
+async def translate_gemini_1(strings, shopDomain, target_lang, brand_tone, region):
+    return await _translate_with_gemini(strings, shopDomain, target_lang, brand_tone, region, genai_llm_1)
 
 
-async def translate_gemini_2(strings, shopDomain, target_lang, brand_tone):
-    return await _translate_with_gemini(strings, shopDomain, target_lang, brand_tone, genai_llm_2)
+async def translate_gemini_2(strings, shopDomain, target_lang, brand_tone, region):
+    return await _translate_with_gemini(strings, shopDomain, target_lang, brand_tone, region, genai_llm_2)
 
 
 # ===================== BATCH HANDLER =====================
-async def _translate_batch(strings, shopDomain, target_lang, brand_tone, batch_num, total_batches):
+async def _translate_batch(strings, shopDomain, target_lang, brand_tone, region, batch_num, total_batches):
     global model_index
     async with semaphore:
         print(
@@ -175,11 +177,11 @@ async def _translate_batch(strings, shopDomain, target_lang, brand_tone, batch_n
 
         try:
             if current_model == "openai":
-                result = await with_retry(translate_openai, strings, shopDomain, target_lang, brand_tone)
+                result = await with_retry(translate_openai, strings, shopDomain, target_lang, brand_tone, region)
             elif current_model == "gemini1":
-                result = await with_retry(translate_gemini_1, strings, shopDomain, target_lang, brand_tone)
+                result = await with_retry(translate_gemini_1, strings, shopDomain, target_lang, brand_tone, region)
             else:
-                result = await with_retry(translate_gemini_2, strings, shopDomain, target_lang, brand_tone)
+                result = await with_retry(translate_gemini_2, strings, shopDomain, target_lang, brand_tone, region)
         except Exception as e:
             print(f"⚠ {current_model} failed, falling back: {e}")
             for alt in model_cycle:
@@ -187,11 +189,11 @@ async def _translate_batch(strings, shopDomain, target_lang, brand_tone, batch_n
                     continue
                 try:
                     if alt == "openai":
-                        result = await translate_openai(strings, shopDomain, target_lang, brand_tone)
+                        result = await translate_openai(strings, shopDomain, target_lang, brand_tone, region)
                     elif alt == "gemini1":
-                        result = await translate_gemini_1(strings, shopDomain, target_lang, brand_tone)
+                        result = await translate_gemini_1(strings, shopDomain, target_lang, brand_tone, region)
                     else:
-                        result = await translate_gemini_2(strings, shopDomain, target_lang, brand_tone)
+                        result = await translate_gemini_2(strings, shopDomain, target_lang, brand_tone, region)
                     break
                 except Exception as e2:
                     print(f"⚠ Fallback {alt} also failed: {e2}")
@@ -204,7 +206,7 @@ async def _translate_batch(strings, shopDomain, target_lang, brand_tone, batch_n
 
 
 # ===================== MAIN TRANSLATOR =====================
-async def fast_translate_json(data, shopDomain, target_lang, brand_tone):
+async def fast_translate_json(data, shopDomain, target_lang, brand_tone, region):
     positions = []  # (path, string, path_str)
 
     if "fullData" in data and "storeData" in data["fullData"]:
@@ -273,7 +275,7 @@ async def fast_translate_json(data, shopDomain, target_lang, brand_tone):
                for i in range(0, len(strings_to_translate), BATCH_SIZE)]
     total_batches = len(batches)
 
-    tasks = [_translate_batch(batch, shopDomain, target_lang, brand_tone, idx+1, total_batches)
+    tasks = [_translate_batch(batch, shopDomain, target_lang, brand_tone, region, idx+1, total_batches)
              for idx, batch in enumerate(batches)]
     batch_results = await asyncio.gather(*tasks)
 

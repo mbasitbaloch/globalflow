@@ -16,6 +16,10 @@ def fewshotPrompt(llm, qdrant, query):
                 models.FieldCondition(
                     key="targetLanguage",
                     match=models.MatchValue(value=query.targetLanguage)
+                ),
+                models.FieldCondition(
+                    key="region",
+                    match=models.MatchValue(value=query.region)
                 )
             ]
         ),
@@ -72,16 +76,18 @@ def fewshotPrompt(llm, qdrant, query):
         example_prompt=example_prompt,
         examples=[example],
         prefix="""
-        Translate the following strings into {targetLanguage}.
+        Translate the following strings into {targetLanguage}, adapted for the {region} region.
         Maintain the brand tone as {brandTone}.
-        ⚠ If a string contains HTML tags (<p>, <div>, <br>, etc.), keep the tags exactly as they are, 
+        ⚠ If a string contains HTML tags (<p>, <div>, <br>, etc.), keep the tags exactly as they are,
         and only translate the inner text.
-        Return ONLY translations line by line, same order:
+        Ensure cultural and linguistic nuances are appropriate for {region}.
+        Return ONLY translations line by line, in the same order:
         """,
         suffix="Source: {input}\nTranslated:",
-        input_variables=["input", "targetLanguage", "brandTone"],
+        input_variables=["input", "targetLanguage", "brandTone", "region"],
     )
 
+    # print(f"Fewshot prompt template is created!\n{few_shot_prompt}")
     print("Fewshot prompt is created!")
 
     print("Expected variables:", few_shot_prompt.input_variables)
@@ -95,6 +101,7 @@ def fewshotPrompt(llm, qdrant, query):
         "input": query.input,
         "targetLanguage": query.targetLanguage,
         "brandTone": query.brandTone,
+        "region": query.region
     })
 
     print("Response is created!")
@@ -112,6 +119,7 @@ class TranslationQuery:
     input: str
     targetLanguage: str
     brandTone: str
+    region: str
 
 # Example usage
 # query = TranslationQuery(
