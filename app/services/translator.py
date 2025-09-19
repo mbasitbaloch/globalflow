@@ -169,16 +169,18 @@ async def _translate_batch(strings, target_lang, brand_tone, batch_num, total_ba
             f"[✔] Completed batch {batch_num}/{total_batches} via {current_model}")
         return result
 
-
 # ===================== MAIN TRANSLATOR =====================
+
+
 async def fast_translate_json(data, target_lang, brand_tone):
     positions = []  # (path, string, path_str)
 
-    if "fullData" in data and "storeData" in data["fullData"]:
-        target_data = data["fullData"]["storeData"]
-    else:
-        print("⚠ No fullData.storeData found")
-        return data
+    # if "fullData" in data and "storeData" in data["fullData"]:
+    #     target_data = data["fullData"]["storeData"]
+    # else:
+    #     print("⚠ No fullData.storeData found")
+    #     return data
+    target_data = data
 
     # ---------- CUSTOM COLLECTION RULES ----------
     def collect_strings(d, path=None, parent_key=None):
@@ -192,6 +194,12 @@ async def fast_translate_json(data, target_lang, brand_tone):
                     if isinstance(v, str) and is_translateable(v):
                         positions.append(
                             (path + [k], v, ".".join(map(str, path + [k]))))
+                elif parent_key == "images" and k == "altText":
+                    if isinstance(v, str) and is_translateable(v):
+                        positions.append(
+                            (path + [k], v, ".".join(map(str, path + [k])))
+                        )
+
                 # VARIANTS
                 elif parent_key == "variants" and k == "title":
                     if isinstance(v, str) and is_translateable(v):
@@ -208,13 +216,57 @@ async def fast_translate_json(data, target_lang, brand_tone):
                         positions.append(
                             (path + [k], v, ".".join(map(str, path + [k]))))
                 # onlineStoreThemes, menus, links, shopPolicies
+                # elif k == "translatableContent" and isinstance(v, list):
+                #     for i, item in enumerate(v):
+                #         if isinstance(item, dict) and "value" in item:
+                #             val = item["value"]
+                #             if isinstance(val, str) and is_translateable(val):
+                #                 positions.append(
+                #                     (path + [k, i, "value"], val, ".".join(map(str, path + [k, i, "value"]))))
+                # elif k == "translatableContent" and isinstance(v, list):
+                #     for i, item in enumerate(v):
+                #         if isinstance(item, dict):
+                #             for field in ["value", "locale", "key"]:
+                #                 if field in item and isinstance(item[field], str) and is_translateable(item[field]):
+                #                     positions.append(
+                #                         (path + [k, i, field], item[field],
+                #                          ".".join(map(str, path + [k, i, field])))
+                #                     )
+                # elif k == "translatableContent" and isinstance(v, list):
+                #     for i, item in enumerate(v):
+                #         if isinstance(item, dict):
+                #             # Recursively collect strings inside this item also
+                #             for field in ["value", "locale", "key"]:
+                #                 if field in item and isinstance(item[field], str) and is_translateable(item[field]):
+                #                     positions.append(
+                #                         (path + [k, i, field], item[field],
+                #                          ".".join(map(str, path + [k, i, field])))
+                #                     )
+                #             #  NEW: recursive check for deeper nested structures
+                #             collect_strings(item, path + [k, i], k)
+                # SHOP POLICIES - SPECIAL HANDLING
+                elif parent_key == "shopPolicies" and k in ["value", "locale"]:
+                    if isinstance(v, str) and is_translateable(v):
+                        positions.append(
+                            (path + [k], v, ".".join(map(str, path + [k]))))
+
+                # TRANSLATABLE CONTENT - COMPLETE HANDLING (including locale)
                 elif k == "translatableContent" and isinstance(v, list):
                     for i, item in enumerate(v):
-                        if isinstance(item, dict) and "value" in item:
-                            val = item["value"]
-                            if isinstance(val, str) and is_translateable(val):
-                                positions.append(
-                                    (path + [k, i, "value"], val, ".".join(map(str, path + [k, i, "value"]))))
+                        if isinstance(item, dict):
+                            # Handle ALL translatable fields in translatableContent
+                            for field in item:
+                                if field in ["value", "locale"] and isinstance(item[field], str) and is_translateable(item[field]):
+                                    positions.append(
+                                        (path + [k, i, field], item[field],
+                                         ".".join(map(str, path + [k, i, field])))
+                                    )
+
+                # Handle other common translatable fields
+                elif k in ["title", "body", "value", "altText", "description", "name"]:
+                    if isinstance(v, str) and is_translateable(v):
+                        positions.append(
+                            (path + [k], v, ".".join(map(str, path + [k]))))
                 else:
                     collect_strings(v, path + [k], k)
 
@@ -245,11 +297,26 @@ async def fast_translate_json(data, target_lang, brand_tone):
     batch_results = await asyncio.gather(*tasks)
 
     # ---------- INJECTION ----------
-    def set_value(d, path, value):
+    # def set_value(d, path, value):
+    #     ref = d
+    #     for p in path[:-1]:
+    #         ref = ref[p]
+    #     ref[path[-1]] = value
+    def set_value_with_original(d, path, translated):
         ref = d
         for p in path[:-1]:
             ref = ref[p]
-        ref[path[-1]] = value
+
+        last_key = path[-1]
+        original_value = ref[last_key]
+
+        # Add original string with "original" prefix
+        prefixed_key = f"original{last_key[0].upper()}{last_key[1:]}"
+        if prefixed_key not in ref:  # avoid overwriting if already exists
+            ref[prefixed_key] = original_value
+
+        # Replace main field with translated string
+        ref[last_key] = translated
 
     injected_log = []
     string_index = 0
@@ -266,8 +333,14 @@ async def fast_translate_json(data, target_lang, brand_tone):
 
         for orig, translated in zip(batch, result):
             path, orig_val, path_str = positions[string_index]
-            set_value(target_data, path, translated)
-            injected_log.append({"path": path_str, "translated": translated})
+
+            set_value_with_original(target_data, path, translated)
+
+            injected_log.append({
+                "path": path_str,
+                "original": orig_val,
+                "translated": translated
+            })
             print(f"[INJECT] {path_str} -> {translated[:60]}")
             string_index += 1
 

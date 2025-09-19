@@ -193,3 +193,8 @@ docker-compose.yml
 app/hs_main.py
 app/services/hs_celery.py
 app/routes/hs_users.py
+
+# Log files
+fetched_data/
+logs/
+tmp/

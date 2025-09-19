@@ -69,9 +69,9 @@ async def shopify_translate(req: dict):
         req["brandTone"]
     )
 
-    print("Celery task started...")
-    task = store_data.delay(translated_data, req, raw_data)  # type: ignore
-    print(f"New task ID: {task.id}")
+    # print("Celery task started...")
+    # task = store_data.delay(translated_data, req, raw_data)  # type: ignore
+    # print(f"New task ID: {task.id}")
 
     # Save translated JSON to file
     print("Saving translated JSON to file...")
