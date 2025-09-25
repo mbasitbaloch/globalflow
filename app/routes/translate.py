@@ -25,13 +25,9 @@ from ..config import settings
 from ..mongodb import users_collection
 
 
-load_dotenv()
 COLLECTION_NAME = settings.COLLECTION_NAME
 
 router = APIRouter()
-
-
-# @celery_app.task()
 
 
 @router.post("/shopify/translate")
@@ -69,10 +65,8 @@ async def shopify_translate(req: dict):
 
     translated_data = await fast_translate_json(
         raw_data,
-        req["shopDomain"],
         req["targetLanguage"],
-        req["brandTone"],
-        user.get("region", None)
+        req["brandTone"]
     )
 
     print("Celery task started...")

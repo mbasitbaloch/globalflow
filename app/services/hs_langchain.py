@@ -1,10 +1,13 @@
 from langchain_core.prompts import PromptTemplate, FewShotPromptTemplate
 from qdrant_client.http import models
 from app.config import settings
+from dataclasses import dataclass
+from langchain_core.output_parsers import StrOutputParser
+from typing import List
 import json
 
 
-def fewshotPrompt(llm, qdrant, query):
+def fewshotTranslation(llm, qdrant, query):
     scroll_results, _ = qdrant.scroll(
         collection_name=settings.COLLECTION_NAME,
         scroll_filter=models.Filter(
@@ -35,21 +38,6 @@ def fewshotPrompt(llm, qdrant, query):
 
     original_text = original_text.replace("{", "{{").replace("}", "}}") if original_text is not None else ""
     translated_text = translated_text.replace("{", "{{").replace("}", "}}") if translated_text is not None else ""
-   
-    # Final JSON response structure
-    # result_json = {
-    #     "points": original_text,
-    #     "next_page": translated_text
-    # }
-
-    # # Ensure directory exists
-    # os.makedirs("result", exist_ok=True)
-
-    # # Save result to file
-    # with open("result/result.json", "w", encoding="utf-8") as f:
-    #     json.dump(result_json, f, indent=4, ensure_ascii=False)
-
-    # print("Result saved in result/result.json")
 
     example = {
         "original": original_text[:len(original_text)//4],
@@ -72,7 +60,7 @@ def fewshotPrompt(llm, qdrant, query):
 
     print("Example prompt is created!")
 
-    few_shot_prompt = FewShotPromptTemplate(
+    fewshot_prompt = FewShotPromptTemplate(
         example_prompt=example_prompt,
         examples=[example],
         prefix="""
@@ -87,15 +75,21 @@ def fewshotPrompt(llm, qdrant, query):
         input_variables=["input", "targetLanguage", "brandTone", "region"],
     )
 
-    # print(f"Fewshot prompt template is created!\n{few_shot_prompt}")
+    print(f"Fewshot prompt template is created!\n{fewshot_prompt}")
     print("Fewshot prompt is created!")
 
-    print("Expected variables:", few_shot_prompt.input_variables)
+    print("Expected variables:", fewshot_prompt.input_variables)
 
 
-    chain = few_shot_prompt | llm
+    chain = fewshot_prompt | llm |StrOutputParser()
 
     print("Chain is created!")
+
+        # 🔹 Handle list input
+    input_text = query.input
+    if isinstance(input_text, list):
+        # Join into newline-separated block for the model
+        input_text = "\n".join(input_text)
 
     response = chain.invoke({
         "input": query.input,
@@ -105,29 +99,86 @@ def fewshotPrompt(llm, qdrant, query):
     })
 
     print("Response is created!")
+    
+    try:
+        translations = json.loads(response)
+    except Exception:
+        translations = response.split("\n")
+
+    return translations
+
+def fewshotCategorization(llm, text):
+    example = [
+        {"text": "Blue cotton T-Shirt", "label": "ordinary"},
+        {"text": "Add to Cart", "label": "ordinary"},
+        {"text": "Best quality leather shoes", "label": "ordinary"},
+        {"text": "Customer Privacy Policy", "label": "business"},
+        {"text": "Refunds will be processed within 7 days", "label": "business"},
+        {"text": "Continue Shopping", "label": "ordinary"},
+        {"text": "Wholesale Pricing Available", "label": "business"},
+        {"text": "Track Your Order", "label": "ordinary"},
+        {"text": "Terms & Conditions apply", "label": "business"},
+        {"text": "New Summer Collection", "label": "ordinary"},
+        {"text": "Business Invoice Download", "label": "business"},
+        {"text": "Proceed to Checkout", "label": "ordinary"},
+        {"text": "This product is covered by a 1-year warranty", "label": "business"},
+        {"text": "Flash Sale: Up to 50% off", "label": "ordinary"},
+        {"text": "Compliance with EU regulations", "label": "business"},
+        {"text": "Sign In", "label": "ordinary"},
+        {"text": "Corporate Account Registration", "label": "business"},
+        {"text": "View Cart", "label": "ordinary"},
+        {"text": "Export License Required", "label": "business"},
+        {"text": "Shop Now", "label": "ordinary"},
+        ]
+
+    example_template = """
+    Text: {text}
+    Category: {label}
+    """
+
+    example_prompt = PromptTemplate(
+        input_variables=["text", "label"],
+        template=example_template,
+    )
+
+    fewshot_prompt = FewShotPromptTemplate(
+        example_prompt=example_prompt,
+        examples=example,
+        prefix="""You are a text classifier. 
+        Classify each input string into one of two categories:
+        
+        - "business" → official, professional, legal, formal, or business-related.
+        - "ordinary" → casual, personal, everyday language.
+        
+        Here are some examples:""",
+        suffix="\nText: {text}\nCategory:",
+        input_variables=["text"]
+    )
+
+    chain = fewshot_prompt | llm
+
+    response = chain.invoke({
+        "text": text,
+    })
+
+    return response.content.strip().lower()
 
 
+def stringCategorize(llm, _strings_to_translate):
+    text_to_translate = {"business": [], "ordinary": []}
+    for s in _strings_to_translate:
+        response = fewshotCategorization(llm, s)
+        if response == "business":
+            text_to_translate["business"].append(s)
+        else:
+            text_to_translate["ordinary"].append(s)
+    return text_to_translate
 
-    return response
-
-
-from dataclasses import dataclass
 
 @dataclass
 class TranslationQuery:
     shopDomain: str
-    input: str
+    input: List[str]
     targetLanguage: str
     brandTone: str
     region: str
-
-# Example usage
-# query = TranslationQuery(
-#     shopDomain="globalflow-ai-esp.myshopify.com",
-#     input="Hello, how are you?",
-#     targetLanguage="French",
-#     brandTone="Friendly"
-# )
-
-# result = fewshotPrompt(query)
-# print("Translation:", result)

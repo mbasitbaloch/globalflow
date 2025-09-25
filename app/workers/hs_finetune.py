@@ -2,7 +2,7 @@ from openai import OpenAI
 from ..config import settings
 import json
 
-client = OpenAI(api_key=settings.OPENAI_API_KEY)
+client = OpenAI(api_key=settings.OPENAI_API_KEY_1)
 
 source_language = "English"
 target_language = "French"

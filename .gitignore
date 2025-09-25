@@ -160,7 +160,8 @@ logs/
 # Temporary files
 temp/
 tmp/
-# fullData/
+fullData/
+result/
 
 # JWT secrets (if using)
 jwt-secret.key
@@ -201,3 +202,4 @@ fetched_data
 result
 app/services/translator1.py
 gfEnv
+extra.py
