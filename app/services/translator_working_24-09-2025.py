@@ -215,6 +215,40 @@ async def fast_translate_json(data, target_lang, brand_tone):
                     if isinstance(v, str) and is_translateable(v):
                         positions.append(
                             (path + [k], v, ".".join(map(str, path + [k]))))
+                # onlineStoreThemes, menus, links, shopPolicies
+                # elif k == "translatableContent" and isinstance(v, list):
+                #     for i, item in enumerate(v):
+                #         if isinstance(item, dict) and "value" in item:
+                #             val = item["value"]
+                #             if isinstance(val, str) and is_translateable(val):
+                #                 positions.append(
+                #                     (path + [k, i, "value"], val, ".".join(map(str, path + [k, i, "value"]))))
+                # elif k == "translatableContent" and isinstance(v, list):
+                #     for i, item in enumerate(v):
+                #         if isinstance(item, dict):
+                #             for field in ["value", "locale", "key"]:
+                #                 if field in item and isinstance(item[field], str) and is_translateable(item[field]):
+                #                     positions.append(
+                #                         (path + [k, i, field], item[field],
+                #                          ".".join(map(str, path + [k, i, field])))
+                #                     )
+                # elif k == "translatableContent" and isinstance(v, list):
+                #     for i, item in enumerate(v):
+                #         if isinstance(item, dict):
+                #             # Recursively collect strings inside this item also
+                #             for field in ["value", "locale", "key"]:
+                #                 if field in item and isinstance(item[field], str) and is_translateable(item[field]):
+                #                     positions.append(
+                #                         (path + [k, i, field], item[field],
+                #                          ".".join(map(str, path + [k, i, field])))
+                #                     )
+                #             #  NEW: recursive check for deeper nested structures
+                #             collect_strings(item, path + [k, i], k)
+                # SHOP POLICIES - SPECIAL HANDLING
+                # elif parent_key == "shopPolicies" and k in ["value", "locale"]:
+                #     if isinstance(v, str) and is_translateable(v):
+                #         positions.append(
+                #             (path + [k], v, ".".join(map(str, path + [k]))))
 
                         # SHOP POLICIES - translatableContent → only value + locale
                 elif parent_key == "shopPolicies" and k == "translatableContent" and isinstance(v, list):
@@ -323,7 +357,7 @@ async def fast_translate_json(data, target_lang, brand_tone):
 
     # ---- SAVE INJECTED ----
     injected_file = os.path.join(
-        LOG_DIR, f"injected_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        LOG_DIR, f"latest_injected_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
     with open(injected_file, "w", encoding="utf-8") as f:
         json.dump(injected_log, f, ensure_ascii=False, indent=2)
     print(f"Saved injected strings to {injected_file}")

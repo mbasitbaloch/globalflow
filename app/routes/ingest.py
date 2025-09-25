@@ -25,7 +25,8 @@ async def ingest_html(file: UploadFile, target_lang: str = Form(...), db: Sessio
     print("File received:", file.filename)
     print("Target lang:", target_lang)
 
-    translated_text = translator.translate_text(text, target_lang)
+    translated_text = translator.translate_text(
+        text, target_lang)
 
     record = models.Translation(
         source_text=text, target_text=translated_text, target_lang=target_lang, content_type="html"

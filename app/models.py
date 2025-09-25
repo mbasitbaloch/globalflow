@@ -5,7 +5,7 @@ from .database import Base
 
 
 class Translation(Base):
-    __tablename__ = "translations"
+    __tablename__ = "translation"
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, nullable=False)
@@ -16,5 +16,7 @@ class Translation(Base):
     translated_text = Column(JSONB, nullable=False)
     target_lang = Column(String(10), nullable=False)
     content_type = Column(String(50), default="json")
-    translated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+    translated_at = Column(DateTime(timezone=True),
+                           server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True),
+                        onupdate=func.now(), nullable=True)

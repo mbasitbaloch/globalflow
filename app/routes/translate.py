@@ -56,7 +56,7 @@ async def shopify_translate(req: dict):
     today_date = datetime.now().strftime("%Y-%m-%d")
 
     # Save original JSON to file
-    file_name = f"fetched_{uuid.uuid4().hex}.json"
+    file_name = f"New_fetched_{uuid.uuid4().hex}.json"
     file_path = os.path.join("fetched_data", file_name)
     os.makedirs("fetched_data", exist_ok=True)
 
@@ -76,7 +76,7 @@ async def shopify_translate(req: dict):
     # Save translated JSON to file
     print("Saving translated JSON to file...")
 
-    file_name = f"translated_{uuid.uuid4().hex}.json"
+    file_name = f"New_translated_{uuid.uuid4().hex}.json"
     file_path = os.path.join("tmp", file_name)
     os.makedirs("tmp", exist_ok=True)
 
