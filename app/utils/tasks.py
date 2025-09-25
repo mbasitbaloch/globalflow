@@ -1,3 +1,4 @@
+import re
 import json
 import uuid
 from celery import Celery
@@ -18,14 +19,13 @@ celery_app = Celery(
 
 COLLECTION_NAME = settings.COLLECTION_NAME
 
-
 @celery_app.task()
 def store_data(translated_data, req, raw_data):
     db = SessionLocal()
     
     # OpenAI client with error handling
     try:
-        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        client = OpenAI(api_key=settings.OPENAI_API_KEY_1)
     except Exception as e:
         print(f"OpenAI client error: {e}")
         return f"OpenAI client error: {e}"
@@ -74,7 +74,7 @@ def store_data(translated_data, req, raw_data):
         # Store in PostgreSQL
         newObj = Translation(
             user_id=str(user["_id"]) if user else None,
-            industry=user.get("industry") if user else "Unknown",
+            industry=(user or {}).get("industry") or "Unknown",
             shop_domain=req["shopDomain"],
             brand_tone=req["brandTone"],
             original_text=raw_data,

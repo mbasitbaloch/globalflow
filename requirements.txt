@@ -10,14 +10,14 @@ pydantic
 python-dotenv       
 celery
 redis
-# google-generativeai    
+google-generativeai    
 pymongo
 sentry-sdk[fastapi]
 
-langchain-community==0.3.25
-langchain-core==0.3.65
-langchain-google-genai==2.1.5
-langchain-openai==0.3.33
-langchain-qdrant==0.2.0
-langchain-text-splitters==0.3.8
+# langchain-community==0.3.25
+# langchain-core==0.3.65
+# langchain-google-genai==2.1.5
+# langchain-openai==0.3.33
+# langchain-qdrant==0.2.0
+# langchain-text-splitters==0.3.8
 # wsl --install -d ubuntu

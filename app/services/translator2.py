@@ -24,15 +24,15 @@ openai_model_translate = AsyncOpenAI(
 genai.configure(api_key=settings.GEMINI_API_KEY_1) # type: ignore
 gemini_model_1 = genai.GenerativeModel("gemini-1.5-flash") # type: ignore
 
-genai.configure(api_key=settings.GEMINI_API_KEY_2) # type: ignore
-gemini_model_2 = genai.GenerativeModel("gemini-1.5-flash") # type: ignore
+# genai.configure(api_key=settings.GEMINI_API_KEY_2) # type: ignore
+# gemini_model_2 = genai.GenerativeModel("gemini-1.5-flash") # type: ignore
 
 # ==== CONFIG ====
 BATCH_SIZE = 50
-MAX_CONCURRENCY = 3
+MAX_CONCURRENCY = 2
 semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
-model_cycle = ["openai", "gemini1", "gemini2"]
+model_cycle = ["openai", "gemini1"]
 model_index = 0
 
 sys.setrecursionlimit(3000)
@@ -44,37 +44,6 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 # ===================== HELPERS =====================
 def is_translateable(text: str) -> bool:
-    unused = [
-        "<strong style=\"text-transform:uppercase\">%{discount_rejection_message}</strong>",
-        "%{product_name} / %{variant_label}",
-        "%{price}%{accessible_separator}%{per_unit}",
-        "%{price}/%{unit}",
-        "%{price}/%{count}%{unit}",
-        "•••• %{last_characters}",
-        "%{quantity} × %{product_title}",
-        "%{min_time}–%{max_time}",
-        "%{firstMethod}, %{secondMethod}",
-        "%{rest}, %{current},",
-        "%{merchandise_title} ×%{quantity}",
-        "•••• %{last_digits}",
-        "%{currency} (%{currency_symbol})",
-        "1 %{from_currency_code} = %{rate} %{to_currency_code}",
-        "%{tip_percent}%",
-        "+{{numberOfAdditionalProducts}}",
-        "-",
-        "{{count}}+",
-        "{{ quantity }}+",
-        "<p></p>",
-        "CPF/CNPJ",
-        "RUT",
-        "CI/RUC/IVA",
-        "NIT/IVA",
-        "NPWP",
-        "RFC",
-        "DNI/RUC/CE",
-        "NIF/IVA",
-        "DNI/NIF",
-        ]
     if not text or not text.strip():
         return False
     if text.isdigit():
@@ -93,9 +62,7 @@ def is_translateable(text: str) -> bool:
         return False
     if re.match(r"^https?://", text):
         return False
-    if text.startswith(("shopify.", "customer.", "customer_", "templates.", "section.", "sections.", "GlobalFlow.", "shopify:")):
-        return False
-    if text in unused:
+    if text.startswith(("shopify.", "customer.", "customer_", "templates.", "section.", "sections.")):
         return False
     return True
 
@@ -121,7 +88,19 @@ async def with_retry(fn, *args, retries=3, **kwargs):
 
 
 # ===================== TRANSLATION FUNCTIONS =====================
-async def _translate_openai(strings, target_lang, brand_tone, model):
+async def translate_openai(strings, target_lang, brand_tone):
+#     prompt = {
+#         "role": "user",
+#         "content": f"""
+#         Translate the following {len(strings)} strings into {target_lang}.
+#         Maintain the brand tone as '{brand_tone}'.
+#         ⚠ If a string contains HTML tags (<p>, <div>, <br>, etc.), KEEP the tags as-is, only translate inner text.
+#         Return ONLY a valid JSON array of translated strings, in the same order, nothing else.
+#         Strings:
+#         {json.dumps(strings, ensure_ascii=False)}
+# """
+#     }
+
     prompt = f"""
     You are a professional translator.
 
@@ -129,7 +108,7 @@ async def _translate_openai(strings, target_lang, brand_tone, model):
     Translate the following {len(strings)} strings into {target_lang}.
     - Maintain the brand tone as '{brand_tone}'.
     - If a string contains HTML tags (<p>, <div>, <br>, etc.), KEEP the tags unchanged, only translate the inner text.
-    - Preserve placeholders (e.g., {{name}}, %s, {{0}}) exactly as they are. Translate surrounding text but do NOT translate or modify the text inside placeholders.
+    - Preserve placeholders (e.g., {{name}}, %s, {{0}}) exactly as they are.
     - Do NOT merge, omit, or add strings.
     - Do not summarize, simplify, or shorten long texts (e.g., Privacy Policies, Terms & Conditions). Translate them fully.
     - Special rule for language codes:
@@ -153,10 +132,10 @@ async def _translate_openai(strings, target_lang, brand_tone, model):
     ]
 """
 
-    resp = await model.chat.completions.create(
+    resp = await openai_model_translate.chat.completions.create(
         model="gpt-4.1-mini",
         messages=[{"role":"user", "content":prompt}], # type: ignore
-        temperature=0.7,
+        temperature=0.0,
         response_format = {
             "type": "json_schema",
             "json_schema": {
@@ -180,23 +159,21 @@ async def _translate_openai(strings, target_lang, brand_tone, model):
     content = resp.choices[0].message.content
     try:
         data = json.loads(content) # type: ignore
-        if isinstance(data, dict) and "translations" in data:
-            return [clean_line(x) for x in data["translations"]]
-        elif isinstance(data, list):
-            return [clean_line(x) for x in data]
-        else:
-            raise ValueError("Unexpected OpenAI response")
-    except Exception as e:
-        print(f"⚠ Parse fallback: {e}")
+        return [clean_line(x) for x in data.get("translations", [])]
+    except Exception:
         return [clean_line(line) for line in content.split("\n") if line.strip()] # type: ignore
 
-async def translate_openai_1(strings, target_lang, brand_tone):
-    return await _translate_openai(strings, target_lang, brand_tone, openai_model_translate)
 
-async def translate_openai_2(strings, target_lang, brand_tone):
-    return await _translate_openai(strings, target_lang, brand_tone, openai_model_classify)
+async def _translate_with_gemini(strings, target_lang, brand_tone, model):
+#     prompt = f"""
+#     Translate the following {len(strings)} strings into {target_lang}.
+#     Maintain the brand tone as '{brand_tone}'.
+#     ⚠ If a string contains HTML tags (<p>, <div>, <br>, etc.), KEEP the tags as-is, only translate inner text.
+#     Return ONLY a valid JSON array of translated strings, same order, nothing else.
+#     Strings:
+#     {json.dumps(strings, ensure_ascii=False)}
+# """
 
-async def _translate_gemini(strings, target_lang, brand_tone, model):
     prompt = f"""
     You are a professional translator.
 
@@ -204,7 +181,7 @@ async def _translate_gemini(strings, target_lang, brand_tone, model):
     Translate the following {len(strings)} strings into {target_lang}.
     - Maintain the brand tone as '{brand_tone}'.
     - If a string contains HTML tags (<p>, <div>, <br>, etc.), KEEP the tags unchanged, only translate the inner text.
-    - Preserve placeholders (e.g., {{name}}, %s, {{0}}) exactly as they are. Translate surrounding text but do NOT translate or modify the text inside placeholders.
+    - Preserve placeholders (e.g., {{name}}, %s, {{0}}) exactly as they are.
     - Do NOT merge, omit, or add strings.
     - Translate long texts fully (no summarization).
     - Language code rule: if a string is a language code (e.g., "en"), replace it with the correct code for {target_lang}.
@@ -233,24 +210,17 @@ async def _translate_gemini(strings, target_lang, brand_tone, model):
         )
     text = resp.text or "[]"
     try:
-        data = json.loads(text)
-        if isinstance(data, dict) and "translations" in data:
-            return [clean_line(x) for x in data["translations"]]
-        elif isinstance(data, list):
-            return [clean_line(x) for x in data]
-        else:
-            raise ValueError("Unexpected Gemini response")
-    except Exception as e:
-        print(f"⚠ Parse fallback: {e}")
+        return [clean_line(x) for x in json.loads(text)]
+    except Exception:
         return [clean_line(line) for line in text.split("\n") if line.strip()]
 
 
 async def translate_gemini_1(strings, target_lang, brand_tone):
-    return await _translate_gemini(strings, target_lang, brand_tone, gemini_model_1)
+    return await _translate_with_gemini(strings, target_lang, brand_tone, gemini_model_1)
 
 
-async def translate_gemini_2(strings, target_lang, brand_tone):
-    return await _translate_gemini(strings, target_lang, brand_tone, gemini_model_2)
+# async def translate_gemini_2(strings, target_lang, brand_tone):
+#     return await _translate_with_gemini(strings, target_lang, brand_tone, gemini_model_2)
 
 
 # ===================== CLASSIFICATION =====================
@@ -267,6 +237,25 @@ async def classify_strings(strings_batch, batch_num, total_batches):
         left = await classify_strings(strings_batch[:mid], batch_num, total_batches)
         right = await classify_strings(strings_batch[mid:], batch_num, total_batches)
         return left + right
+
+#     prompt = f"""
+# You are a text classifier. 
+# Classify each string into exactly one of these categories:
+# - "business" (for business, legal, official, invoice, policy, formal communication)
+# - "ordinary" (casual, product descriptions, marketing, blogs, general content)
+
+# Return ONLY a valid JSON array of labels in the same order.
+
+# Examples:
+# Input: ["Invoice #4533", "Big summer sale!", "Refunds will be processed within 7 days", "Sign In"]
+# Output: ["business", "ordinary", "business", "ordinary"]
+
+# Input: ["Terms and Conditions apply", "Export License Required", "Check out our new arrivals", "Best quality leather shoes"]
+# Output: ["business", "business", "ordinary", "ordinary"]
+
+# Now classify:
+# {json.dumps(strings_batch, ensure_ascii=False)}
+# """
 
     prompt =  f"""
 You are a strict text classifier.
@@ -299,7 +288,7 @@ Respond with ONLY a valid JSON array of {len(strings_batch)} strings. No extra t
     resp = await openai_model_translate.chat.completions.create(
         model="gpt-4.1-mini",
         messages=[{"role":"user", "content":prompt}], # type: ignore
-        temperature=0.7,
+        temperature=0.0,
         response_format = {
             "type": "json_schema",
             "json_schema": {
@@ -336,88 +325,130 @@ Respond with ONLY a valid JSON array of {len(strings_batch)} strings. No extra t
         return [line.strip().lower() for line in labels_text.split("\n") if line.strip()] # type: ignore
 
 # ===================== BATCH HANDLER =====================
+# async def _translate_batch(indexed_strings, target_lang, brand_tone, batch_num, total_batches, type, progress=None, max_retries=3):
+#     global model_index
+
+#     for attempt in range(1, max_retries + 1):
+#         async with semaphore:
+#             if type == "business":
+#                 model_index = 0
+#             else:
+#                 model_index = 1
+
+#             print(f"\n[DEBUG] {type.upper()} Batch {batch_num}/{total_batches} → {len(indexed_strings)} strings "
+#                   f"(attempt {attempt}/{max_retries})")
+
+#             current_model = model_cycle[model_index % len(model_cycle)]
+#             model_index += 1
+
+#             strings = [s for _, s in indexed_strings]
+
+#             try:
+#                 if current_model == "openai":
+#                     translations = await with_retry(translate_openai, strings, target_lang, brand_tone)
+#                 elif current_model == "gemini1":
+#                     translations = await with_retry(translate_gemini_1, strings, target_lang, brand_tone)
+#                 else:
+#                     translations = await with_retry(translate_gemini_2, strings, target_lang, brand_tone)
+#             except Exception as e:
+#                 print(f"⚠ {current_model} failed, falling back: {e}")
+#                 translations = None
+#                 for alt in model_cycle:
+#                     if alt == current_model:
+#                         continue
+#                     try:
+#                         if alt == "openai":
+#                             translations = await translate_openai(strings, target_lang, brand_tone)
+#                         elif alt == "gemini1":
+#                             translations = await translate_gemini_1(strings, target_lang, brand_tone)
+#                         else:
+#                             translations = await translate_gemini_2(strings, target_lang, brand_tone)
+#                         break
+#                     except Exception as e2:
+#                         print(f"⚠ Fallback {alt} also failed: {e2}")
+
+#             # ✅ Validation: correct length
+#             if translations and len(translations) == len(strings):
+#                 if progress is not None:
+#                     progress["done"] += 1
+#                     print(f"[PROGRESS] {progress['done']}/{progress['total']} batches done "
+#                         f"(latest: {type} batch {batch_num} via {current_model})")
+#                 return [(i, t) for (i, _), t in zip(indexed_strings, translations)]
+#             else:
+#                 print(f"⚠ Validation failed for {type} batch {batch_num} on attempt {attempt}/{max_retries}. "
+#                       f"Expected {len(strings)}, got {len(translations) if translations else 'None'}.")
+
+#     # 🚨 After all retries fail
+#     raise Exception(f"All retries failed for {type} batch {batch_num}")
+
+
 async def _translate_batch(indexed_strings, target_lang, brand_tone, batch_num, total_batches, type, progress=None):
-    strings = [s for _, s in indexed_strings]
-    best_provider = None
-    best_translation = None
-    best_score = float("inf")
-
-    # Define provider order based on type
-    if type == "business":
-        providers = ["openai1", "openai2", "gemini1", "gemini2"]
-    else:  # ordinary
-        providers = ["gemini1", "openai1", "openai2", "gemini2"]
-
+    global model_index
 
     async with semaphore:
+        if type == "business":
+            model_index = 0
+        else:
+            model_index = 1
+        strings = [s for _, s in indexed_strings]
         print(
             f"\n[DEBUG] {type.upper()} Batch {batch_num}/{total_batches} → {len(strings)} strings ")
+        current_model = model_cycle[model_index % len(model_cycle)]
+        model_index += 1
 
-        for provider in providers:
-            try:
-                if provider == "openai1":
-                    translations = await with_retry(translate_openai_1, strings, target_lang, brand_tone)
-                elif provider == "openai2":
-                    translations = await with_retry(translate_openai_2, strings, target_lang, brand_tone)
-                elif provider == "gemini1":
-                    translations = await with_retry(translate_gemini_1, strings, target_lang, brand_tone)
-                else:
-                    translations = await with_retry(translate_gemini_2, strings, target_lang, brand_tone)
-
-                if translations:
-                    length = len(translations)
-                    score = abs(len(translations) - len(strings))
-                    if score < best_score or (score == best_score and length > len(best_translation or [])):
-                        best_score = score
-                        best_provider = provider
-                        best_translation = translations
-
-                # ✅ Validation: must match count
-                if translations and len(translations) == len(strings):
-                    if progress is not None:
-                        progress["done"] += 1
-                        print(
-                            f"[PROGRESS: valid] {progress['done']}/{progress['total']} batches done "
-                            f"(latest: {type} batch {batch_num} via {provider})"
-                        )
-                    return [(i, t) for (i, _), t in zip(indexed_strings, translations)]
-                else:
-                    print(f"⚠ {provider} returned {len(translations) if translations else 'None'} items for {type.upper()} batch {batch_num}, expected {len(strings)}")
-                    continue
-
-            except Exception as e:
-                print(f"⚠ {provider} failed for {type} batch {batch_num}: {e}")
-                continue
-
-        # 🚨 If all providers failed validation, use last provider’s output
-        if best_translation:
-            if len(best_translation) < len(strings):
-                best_translation.extend(strings[len(best_translation):])
+        try:
+            if current_model == "openai":
+                translations = await with_retry(translate_openai, strings, target_lang, brand_tone)
             else:
-                best_translation = best_translation[:len(strings)]
+                translations = await with_retry(translate_gemini_1, strings, target_lang, brand_tone)
+
+        except Exception as e:
+            print(f"⚠ {current_model} failed, falling back: {e}")
+            for alt in model_cycle:
+                if alt == current_model:
+                    continue
+                try:
+                    if alt == "openai":
+                        translations = await translate_openai(strings, target_lang, brand_tone)
+                    else:
+                        translations = await translate_gemini_1(strings, target_lang, brand_tone)
+                    break
+                except Exception as e2:
+                    print(f"⚠ Fallback {alt} also failed: {e2}")
+            else:
+                raise Exception("All providers failed!")
+
+        if translations and len(translations) == len(strings):
             if progress is not None:
                 progress["done"] += 1
                 print(
-                    f"[PROGRESS: partial] {progress['done']}/{progress['total']} batches done "
-                    f"⚠ All providers failed validation for {type.upper()} batch {batch_num} "
-                    f"using best provider '{best_provider}' output as fallback"
-                    )
-            return [(i, t if t else s) for (i, s), t in zip(indexed_strings, best_translation)]
+                    f"[PROGRESS: valid] {progress["done"]+progress["invalid"]}/{progress['total']} batches done "
+                    f"(latest: {type} batch {batch_num} via {current_model})"
+                )
         else:
             if progress is not None:
-                progress["done"] += 1
+                progress["invalid"] += 1
                 print(
-                    f"[PROGRESS: failed] {progress['done']}/{progress['total']} batches done "
-                    f"⚠ All providers failed completely "
-                    f"returning original strings for {type.upper()} batch {batch_num}"
-                    )
-            return [(i, s) for (i, s) in indexed_strings]
+                    f"[PROGRESS: invalid] {progress["done"]+progress["invalid"]}/{progress['total']} batches done "
+                    f"(latest: {type} batch {batch_num} via {current_model})"
+                )
+
+        print(f"{progress["done"]} are successful and {progress["invalid"]} are unsuccessful!") #type: ignore
+        return [(i, t) for (i, _), t in zip(indexed_strings, translations)]
+
 
 
 
 # ===================== MAIN TRANSLATOR =====================
 async def fast_translate_json(target_data, target_lang, brand_tone):
     positions = []  # (path, string, path_str)
+
+    # if "fullData" in data and "storeData" in data["fullData"]:
+    #     target_data = data["fullData"]["storeData"]
+    # else:
+    #     print("⚠ No fullData.storeData found")
+    #     return data
+    # target_data = data
 
     # ---------- CUSTOM COLLECTION RULES ----------
     def collect_strings(d, path=None, parent_key=None):
@@ -452,6 +483,14 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
                     if isinstance(v, str) and is_translateable(v):
                         positions.append(
                             (path + [k], v, ".".join(map(str, path + [k]))))
+                # onlineStoreThemes, menus, links, shopPolicies
+                # elif k == "translatableContent" and isinstance(v, list):
+                #     for i, item in enumerate(v):
+                #         if isinstance(item, dict) and "value" in item:
+                #             val = item["value"]
+                #             if isinstance(val, str) and is_translateable(val):
+                #                 positions.append(
+                #                     (path + [k, i, "value"], val, ".".join(map(str, path + [k, i, "value"]))))
                 elif k == "translatableContent" and isinstance(v, list):
                     for i, item in enumerate(v):
                         if isinstance(item, dict):
@@ -468,6 +507,9 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
         elif isinstance(d, list):
             for i, item in enumerate(d):
                 collect_strings(item, path + [i], parent_key)
+
+
+    # VALID_LABELS = {"business", "ordinary"}
 
     def normalize_labels(strings: list[str], labels: list[str], default="ordinary") -> list[str]:
         """
@@ -492,6 +534,7 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
 
     strings_to_translate = [s for _, s, _ in positions]
     print(f"Total strings: {len(strings_to_translate)}")
+    # indexed_strings = list(enumerate(strings_to_translate))
 
     # ---- SAVE EXTRACTED ----
     extracted_log = [{"path": p, "string": s} for _, s, p in positions]
@@ -516,6 +559,7 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
         labels.extend(lbls)
 
     classified = [(i, s, l) for i, (s, l) in enumerate(zip(strings_to_translate, labels))]
+    # classified = [(i, s, l) for (i, s), l in zip(indexed_strings, labels)]
 
     # STEP 2: Split into two groups, preserving index
     business_items = [(i, s) for i, s, l in classified if l == "business"]
@@ -529,7 +573,7 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
     business_batches = [business_items[i:i+BATCH_SIZE] for i in range(0, len(business_items), BATCH_SIZE)]
     ordinary_batches = [ordinary_items[i:i+BATCH_SIZE] for i in range(0, len(ordinary_items), BATCH_SIZE)]
 
-    progress = {"done": 0, "total": len(business_batches) + len(ordinary_batches)}
+    progress = {"done": 0, "invalid": 0, "total": len(business_batches) + len(ordinary_batches)}
 
     # Run translations in parallel
     tasks = []
@@ -550,9 +594,11 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
                    for pair in batch]
 
     # ---------- RECOMBINE ----------
+    # final_results = {i: t for i, t in (business_results + ordinary_results)}
     final_results = [t for _, t in sorted(final_pairs, key=lambda x: x[0])]
 
     comparative_file = os.path.join(LOG_DIR, "comparative.json")
+    # print(f"Translation results:\n{final_results}")
     with open(comparative_file, "w", encoding="utf-8") as f:
         json.dump(
             [{"path":path_str,"orig": orig, "trans": trans} for (path, orig_val, path_str), orig, trans in zip(positions, strings_to_translate, final_results)],
@@ -561,32 +607,23 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
     print(f"Saved comparison strings to {comparative_file}")
 
     # ---------- INJECTION ----------
-    # def set_value(d, path, value):
-    #     ref = d
-    #     for p in path[:-1]:
-    #         ref = ref[p]
-    #     ref[path[-1]] = value
-
-    def set_value_with_original(d, path, translated):
+    def set_value(d, path, value):
         ref = d
         for p in path[:-1]:
             ref = ref[p]
-        last_key = path[-1]
-        original_value = ref[last_key]
-        prefixed_key = f"original{last_key[0].upper()}{last_key[1:]}"
-        if prefixed_key not in ref:
-            ref[prefixed_key] = original_value
-        ref[last_key] = translated
+        ref[path[-1]] = value
 
     injected_log = []
-    counter = 0
+    # for idx, (path, orig_val, path_str) in enumerate(positions):
+    #     translated = final_results.get(idx, orig_val)  # fallback: keep original if missing
+    #     set_value(target_data, path, translated)
+    #     injected_log.append({"path": path_str, "translated": translated})
+    #     print(f"[INJECT] {path_str} -> {translated[:60]}") # type: ignore
     for i, translated in enumerate(final_results):
         path, orig_val, path_str = positions[i]
-        set_value_with_original(target_data, path, translated)
+        set_value(target_data, path, translated)
         injected_log.append({"path": path_str, "translated": translated})
-        counter += 1
-
-    print(f"Total {counter} strings are injected")
+        # print(f"[INJECT] {path_str} -> {translated[:60]}")
 
     # ---- SAVE INJECTED ----
     injected_file = os.path.join(
