@@ -14,11 +14,11 @@ openai_client = AsyncOpenAI(
     timeout=120.0
 )
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY_1")) # type: ignore
-gemini_model_1 = genai.GenerativeModel("gemini-1.5-flash") # type: ignore
+genai.configure(api_key=os.getenv("GEMINI_API_KEY_1"))  # type: ignore
+gemini_model_1 = genai.GenerativeModel("gemini-1.5-flash")  # type: ignore
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY_2")) # type: ignore
-gemini_model_2 = genai.GenerativeModel("gemini-1.5-flash") # type: ignore
+genai.configure(api_key=os.getenv("GEMINI_API_KEY_2"))  # type: ignore
+gemini_model_2 = genai.GenerativeModel("gemini-1.5-flash")  # type: ignore
 
 # ==== CONFIG ====
 BATCH_SIZE = 50
@@ -95,15 +95,15 @@ Strings:
 
     resp = await openai_client.chat.completions.create(
         model="gpt-4.1-mini",
-        messages=[prompt], # type: ignore
+        messages=[prompt],
         temperature=0.7,
     )
 
     content = resp.choices[0].message.content
     try:
-        return [clean_line(x) for x in json.loads(content)] # type: ignore
+        return [clean_line(x) for x in json.loads(content)]
     except Exception:
-        return [clean_line(line) for line in content.split("\n") if line.strip()] # type: ignore
+        return [clean_line(line) for line in content.split("\n") if line.strip()]
 
 
 async def _translate_with_gemini(strings, target_lang, brand_tone, model):
@@ -169,8 +169,9 @@ async def _translate_batch(strings, target_lang, brand_tone, batch_num, total_ba
             f"[✔] Completed batch {batch_num}/{total_batches} via {current_model}")
         return result
 
-
 # ===================== MAIN TRANSLATOR =====================
+
+
 async def fast_translate_json(data, target_lang, brand_tone):
     positions = []  # (path, string, path_str)
 
@@ -214,24 +215,35 @@ async def fast_translate_json(data, target_lang, brand_tone):
                     if isinstance(v, str) and is_translateable(v):
                         positions.append(
                             (path + [k], v, ".".join(map(str, path + [k]))))
-                # onlineStoreThemes, menus, links, shopPolicies
-                # elif k == "translatableContent" and isinstance(v, list):
-                #     for i, item in enumerate(v):
-                #         if isinstance(item, dict) and "value" in item:
-                #             val = item["value"]
-                #             if isinstance(val, str) and is_translateable(val):
-                #                 positions.append(
-                #                     (path + [k, i, "value"], val, ".".join(map(str, path + [k, i, "value"]))))
-                elif k == "translatableContent" and isinstance(v, list):
+
+                        # SHOP POLICIES - translatableContent → only value + locale
+                elif parent_key == "shopPolicies" and k == "translatableContent" and isinstance(v, list):
                     for i, item in enumerate(v):
                         if isinstance(item, dict):
-                            for field in ["value", "locale", "key"]:
+                            for field in ["value", "locale"]:  # only pick value and locale
                                 if field in item and isinstance(item[field], str) and is_translateable(item[field]):
                                     positions.append(
                                         (path + [k, i, field], item[field],
                                          ".".join(map(str, path + [k, i, field])))
                                     )
 
+                # TRANSLATABLE CONTENT - COMPLETE HANDLING (including locale)
+                elif k == "translatableContent" and isinstance(v, list):
+                    for i, item in enumerate(v):
+                        if isinstance(item, dict):
+                            # Handle ALL translatable fields in translatableContent
+                            for field in item:
+                                if field in ["value", "locale"] and isinstance(item[field], str) and is_translateable(item[field]):
+                                    positions.append(
+                                        (path + [k, i, field], item[field],
+                                         ".".join(map(str, path + [k, i, field])))
+                                    )
+
+                # Handle other common translatable fields
+                elif k in ["title", "body", "value", "altText", "description", "name"]:
+                    if isinstance(v, str) and is_translateable(v):
+                        positions.append(
+                            (path + [k], v, ".".join(map(str, path + [k]))))
                 else:
                     collect_strings(v, path + [k], k)
 
@@ -247,7 +259,7 @@ async def fast_translate_json(data, target_lang, brand_tone):
     # ---- SAVE EXTRACTED ----
     extracted_log = [{"path": p, "string": s} for _, s, p in positions]
     extracted_file = os.path.join(
-        LOG_DIR, f"extracted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        LOG_DIR, f"latest_extracted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
     with open(extracted_file, "w", encoding="utf-8") as f:
         json.dump(extracted_log, f, ensure_ascii=False, indent=2)
     print(f"Saved extracted strings to {extracted_file}")
@@ -262,11 +274,26 @@ async def fast_translate_json(data, target_lang, brand_tone):
     batch_results = await asyncio.gather(*tasks)
 
     # ---------- INJECTION ----------
-    def set_value(d, path, value):
+    # def set_value(d, path, value):
+    #     ref = d
+    #     for p in path[:-1]:
+    #         ref = ref[p]
+    #     ref[path[-1]] = value
+    def set_value_with_original(d, path, translated):
         ref = d
         for p in path[:-1]:
             ref = ref[p]
-        ref[path[-1]] = value
+
+        last_key = path[-1]
+        original_value = ref[last_key]
+
+        # Add original string with "original" prefix
+        prefixed_key = f"original{last_key[0].upper()}{last_key[1:]}"
+        if prefixed_key not in ref:  # avoid overwriting if already exists
+            ref[prefixed_key] = original_value
+
+        # Replace main field with translated string
+        ref[last_key] = translated
 
     injected_log = []
     string_index = 0
@@ -283,8 +310,14 @@ async def fast_translate_json(data, target_lang, brand_tone):
 
         for orig, translated in zip(batch, result):
             path, orig_val, path_str = positions[string_index]
-            set_value(data["fullData"]["storeData"], path, translated)
-            injected_log.append({"path": path_str, "translated": translated})
+
+            set_value_with_original(target_data, path, translated)
+
+            injected_log.append({
+                "path": path_str,
+                "original": orig_val,
+                "translated": translated
+            })
             print(f"[INJECT] {path_str} -> {translated[:60]}")
             string_index += 1
 

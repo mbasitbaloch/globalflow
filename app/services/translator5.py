@@ -17,6 +17,14 @@ os.makedirs(LOG_DIR, exist_ok=True)
 REPORT_DIR = os.path.join(LOG_DIR, "report")
 os.makedirs(REPORT_DIR, exist_ok=True)
 
+CONSOLE_DIR = os.path.join(LOG_DIR, "console")
+os.makedirs(CONSOLE_DIR, exist_ok=True)
+console_file = os.path.join(CONSOLE_DIR, "console.json")
+
+raw_logs = [{"message" : "Logs"}]
+with open(console_file, "w", encoding="utf-8") as f:
+    json.dump(raw_logs[0], f, ensure_ascii=False, indent=4)
+
 # ===================== GLOBAL REPORT TRACKER =====================
 TRANSLATION_STATS = {
     "rate_limits": {
@@ -45,12 +53,12 @@ TRANSLATION_STATS = {
 # ==== CLIENTS ====
 openai_model_1 = AsyncOpenAI(
     api_key=settings.OPENAI_API_KEY_1,
-    timeout=100.0
+    timeout=150.0
 )
 
 openai_model_2 = AsyncOpenAI(
     api_key=settings.OPENAI_API_KEY_2,
-    timeout=100.0
+    timeout=150.0
 )
 
 genai.configure(api_key=settings.GEMINI_API_KEY_1)  # type: ignore
@@ -60,13 +68,12 @@ gemini_model_1 = genai.GenerativeModel("gemini-2.0-flash-lite")  # type: ignore 
 # gemini_model_2 = genai.GenerativeModel("gemini-1.5-flash")  # type: ignore
 
 # ==== CONFIG ====
-BATCH_SIZE = 50
-MAX_CONCURRENCY_CLASSIFICATION = 6
+CLASSIFICATION_BATCH_SIZE = 50
+MAX_CONCURRENCY_CLASSIFICATION = 20
 semaphore_classification = asyncio.Semaphore(MAX_CONCURRENCY_CLASSIFICATION)
-# classification_time = []
-MAX_CONCURRENCY_TRANSLATION = 6
+TRANSLATION_BATCH_SIZE = 30
+MAX_CONCURRENCY_TRANSLATION = 20
 semaphore_translation = asyncio.Semaphore(MAX_CONCURRENCY_TRANSLATION)
-# translation_time = []
 
 classification_model_cycle = ["openai1", "openai2", "gemini1"]
 model_index_classify = 0
@@ -145,14 +152,17 @@ def clean_line(line: str) -> str:
     return re.sub(r'^\d+[\.\)]\s*', '', line).strip()
 
 
-async def with_retry(fn, *args, provider=None, retries=3, **kwargs):
+async def with_retry(fn, *args, retries=3, **kwargs):
     for i in range(retries):
         try:
             return await fn(*args, **kwargs)
         except Exception as e:
+            provider = kwargs.get("provider", "unknown")
+            batch_num = kwargs.get("batch_num", 0)
+            typ = kwargs.get("type", "N/A")
             if "Rate limit" in str(e) or "quota" in str(e).lower():
                 wait = (2 ** i) + random.random()
-                msg = f"⚠ Rate limit for {provider}, retrying in {wait:.2f}s..."
+                msg = f"⚠ Rate limit for {provider}, batch {type} {batch_num}, retrying in {wait:.2f}s..."
                 print(msg)
                 TRANSLATION_STATS["rate_limits"]["total"].append(
                     {"provider": provider, "time": datetime.now().isoformat(), "wait": wait})
@@ -160,14 +170,14 @@ async def with_retry(fn, *args, provider=None, retries=3, **kwargs):
                     {"time": datetime.now().isoformat(), "wait": wait})
                 await asyncio.sleep(wait)
             else:
-                print(f"⚠ Error in {provider}: {e}, retrying...")
+                print(f"⚠ Error in, batch {type} {batch_num}, {provider}: {e}, retrying...")
                 await asyncio.sleep(2)
-    raise Exception(f"Max retries reached for {provider}")
+    raise Exception(f"Max retries reached for {kwargs.get('provider')}")
 
 
 # ===================== CLASSIFICATION FUNCTIONS =====================
 
-async def _classify_openai(strings_batch, batch_num, total_batches, classification_model):
+async def _classify_openai(strings_batch, batch_num, total_batches, classification_model, provider, type):
     """
     Classify strings into 'business' or 'ordinary'.
     """
@@ -176,9 +186,10 @@ async def _classify_openai(strings_batch, batch_num, total_batches, classificati
     total_chars = sum(len(s) for s in strings_batch)
     if total_chars > MAX_CHARS_PER_CLASSIFY and len(strings_batch) > 1:
         # split into two equal parts
+        print(f"{total_chars//4} total tokens, Splitting batch due to large size")
         mid = len(strings_batch) // 2
-        left = await _classify_openai(strings_batch[:mid], batch_num, total_batches, classification_model)
-        right = await _classify_openai(strings_batch[mid:], batch_num, total_batches, classification_model)
+        left = await _classify_openai(strings_batch[:mid], batch_num, total_batches, classification_model, provider, type)
+        right = await _classify_openai(strings_batch[mid:], batch_num, total_batches, classification_model, provider, type)
         return left + right
 
     prompt = f"""
@@ -249,18 +260,18 @@ async def _classify_openai(strings_batch, batch_num, total_batches, classificati
         # labels = [l if l in VALID_LABELS else "ordinary" for l in labels]
         # return labels
     except Exception as e:
-        print(f"⚠ Parse fallback: {e}")
+        print(f"⚠ Parse fallback {provider} for {type} batch {batch_num}: {e}")
         return [line.strip().lower() for line in labels_text.split("\n") if line.strip()]
         # labels = [l if l in VALID_LABELS else "ordinary" for l in labels]
         # return labels
     
-async def classify_openai_1(strings_batch, batch_num, total_batches):
-    return await _classify_openai(strings_batch, batch_num, total_batches, openai_model_1)
+async def classify_openai_1(strings_batch, batch_num, total_batches, provider, type):
+    return await _classify_openai(strings_batch, batch_num, total_batches, openai_model_1, provider, type)
 
-async def classify_openai_2(strings_batch, batch_num, total_batches):
-    return await _classify_openai(strings_batch, batch_num, total_batches, openai_model_2)
+async def classify_openai_2(strings_batch, batch_num, total_batches, provider, type):
+    return await _classify_openai(strings_batch, batch_num, total_batches, openai_model_2, provider, type)
 
-async def _classify_gemini(strings_batch, batch_num, total_batches, model):
+async def _classify_gemini(strings_batch, batch_num, total_batches, classification_model, provider, type):
     """
     Classify strings into 'business' or 'ordinary'.
     """
@@ -269,9 +280,10 @@ async def _classify_gemini(strings_batch, batch_num, total_batches, model):
     total_chars = sum(len(s) for s in strings_batch)
     if total_chars > MAX_CHARS_PER_CLASSIFY and len(strings_batch) > 1:
         # split into two equal parts
+        print(f"{total_chars//4} total tokens, Splitting batch due to large size")
         mid = len(strings_batch) // 2
-        left = await _classify_openai(strings_batch[:mid], batch_num, total_batches, model)
-        right = await _classify_openai(strings_batch[mid:], batch_num, total_batches, model)
+        left = await _classify_gemini(strings_batch[:mid], batch_num, total_batches, classification_model, provider, type)
+        right = await _classify_gemini(strings_batch[mid:], batch_num, total_batches, classification_model, provider, type)
         return left + right
 
     prompt = f"""
@@ -300,10 +312,9 @@ async def _classify_gemini(strings_batch, batch_num, total_batches, model):
     IMPORTANT:
     Respond with ONLY a valid JSON array of {len(strings_batch)} strings. No extra text.
     """
-    
-    # resp = await model.generate_content_async(prompt, generation_config={"response_mime_type": "application/json"})
+    # resp = await classification_model.generate_content_async(prompt, generation_config={"response_mime_type": "application/json"})
     resp = await asyncio.to_thread(
-        model.generate_content,
+        classification_model.generate_content,
         prompt,
         generation_config={"response_mime_type": "application/json"}
     )
@@ -320,37 +331,34 @@ async def _classify_gemini(strings_batch, batch_num, total_batches, model):
         # labels = [l if l in VALID_LABELS else "ordinary" for l in labels]
         # return labels
     except Exception as e:
-        print(f"⚠ Parse fallback: {e}")
+        print(f"⚠ Parse fallback {provider} for {type} batch {batch_num}: {e}")
         return [line.strip().lower() for line in labels_text.split("\n") if line.strip()]
         # labels = [l if l in VALID_LABELS else "ordinary" for l in labels]
         # return labels
 
-async def classify_gemini_1(strings_batch, batch_num, total_batches):
-    return await _classify_gemini(strings_batch, batch_num, total_batches, gemini_model_1)
-
+async def classify_gemini_1(strings_batch, batch_num, total_batches, provider, type):
+    return await _classify_gemini(strings_batch, batch_num, total_batches, gemini_model_1, provider, type)
 
 # ===================== BATCH CLASSIFICATION =====================
 
 async def _classify_batch(indexed_strings, batch_num, total_batches, classification_progress=None):
     global model_index_classify
-    # global classification_end
-    # classification_time.append(datetime.now())
     strings = [s for _, s in indexed_strings]
     classification_model_cycle = ["openai1", "openai2", "gemini1"]
     VALID_LABELS = {"ordinary", "business"}
-    raw_ordinary = ["ordinary"] * len(strings)
+    raw_ordinary = ["ordinary" for i in range(50)]
     async with semaphore_classification:
-        print(f"\n[DEBUG] Batch {batch_num}/{total_batches} → {len(strings)} strings ")
         current_model = classification_model_cycle[model_index_classify % len(classification_model_cycle)]
         model_index_classify += 1
+        print(f"\n[DEBUG] Batch {batch_num}/{total_batches} via {current_model} → {len(strings)} strings ")
 
         try:
             if current_model == "openai1":
-                result = await with_retry(classify_openai_1, strings, batch_num, total_batches)
+                result = await with_retry(classify_openai_1, strings, batch_num, total_batches, provider=current_model, type=type)
             elif current_model == "openai2":
-                result = await with_retry(classify_openai_2, strings, batch_num, total_batches)
+                result = await with_retry(classify_openai_2, strings, batch_num, total_batches, provider=current_model, type=type)
             else: # gemini1
-                result = await with_retry(classify_gemini_1, strings, batch_num, total_batches)
+                result = await with_retry(classify_gemini_1, strings, batch_num, total_batches, provider=current_model, type=type)
             
             labels = []
             for l in result:
@@ -361,7 +369,6 @@ async def _classify_batch(indexed_strings, batch_num, total_batches, classificat
             if classification_progress is not None:
                 classification_progress["partial"] += 1
                 print(f"[CLASSIFICATION PROGRESS: failed] {classification_progress['valid']} valid, {classification_progress['partial']} partial, total {classification_progress['valid']+classification_progress['partial']}/{classification_progress['total']} (batch {batch_num} via {current_model})")
-            # classification_end = datetime.now()
             return [(i, l) for (i, _), l in zip(indexed_strings, raw_ordinary)]
 
         if labels:
@@ -372,7 +379,6 @@ async def _classify_batch(indexed_strings, batch_num, total_batches, classificat
                 if classification_progress is not None:
                     classification_progress["valid"] += 1
                     print(f"[CLASSIFICATION PROGRESS: valid] {classification_progress['valid']} valid, {classification_progress['partial']} partial, total {classification_progress['valid']+classification_progress['partial']}/{classification_progress['total']} (batch {batch_num} via {current_model})")
-                # classification_end = datetime.now()
                 return [(i, l) for (i, _), l in zip(indexed_strings, labels)]
             # --- FIX: force align translations ---
             elif got < expected:
@@ -386,13 +392,31 @@ async def _classify_batch(indexed_strings, batch_num, total_batches, classificat
             if classification_progress is not None:
                 classification_progress["partial"] += 1
                 print(f"[CLASSIFICATION PROGRESS: partial] {classification_progress['valid']} valid, {classification_progress['partial']} partial, total {classification_progress['valid']+classification_progress['partial']}/{classification_progress['total']} (batch {batch_num} via {current_model})")
-            # classification_end = datetime.now()
             return [(i, l) for (i, _), l in zip(indexed_strings, labels)]
         
 
 # ===================== TRANSLATION FUNCTIONS =====================
 
-async def _translate_openai(strings, target_lang, brand_tone, model):
+async def _translate_openai(strings, target_lang, brand_tone, model, batch_num, type, provider):
+    MAX_CHARS_PER_TRANSLATE = 20_000  # conservative
+    total_chars = sum(len(s) for s in strings)
+    if total_chars > MAX_CHARS_PER_TRANSLATE:
+        # split into two equal parts
+        if len(strings) > 1:
+            print(f"{total_chars} total characters, Splitting {type} batch {batch_num} due to large size, using {provider}")
+            mid = len(strings) // 2
+            left = await _translate_openai(strings[:mid], target_lang, brand_tone, model, batch_num, type, provider)
+            right = await _translate_openai(strings[mid:], target_lang, brand_tone, model, batch_num, type, provider)
+            return left + right
+        else:
+            print(f"{total_chars} total characters, Splitting string of {type} batch {batch_num} due to large size, using {provider}")
+            splitted_strings = strings[0].split(".")
+            mid = len(strings) // 2
+            left = await _translate_openai(splitted_strings[:mid], target_lang, brand_tone, model, batch_num, type, provider)
+            right = await _translate_openai(splitted_strings[mid:], target_lang, brand_tone, model, batch_num, type, provider)
+            result = left + right
+            return ["".join(result)]
+    
     prompt = f"""
     You are a professional translator.
 
@@ -458,20 +482,39 @@ async def _translate_openai(strings, target_lang, brand_tone, model):
         else:
             raise ValueError("Unexpected OpenAI response")
     except Exception as e:
-        print(f"⚠ Parse fallback: {e}")
+        print(f"⚠ Parse fallback {provider} for {type} batch {batch_num}: {e}")
         # type: ignore
         return [clean_line(line) for line in content.split("\n") if line.strip()]
 
 
-async def translate_openai_1(strings, target_lang, brand_tone):
-    return await _translate_openai(strings, target_lang, brand_tone, openai_model_1)
+async def translate_openai_1(strings, target_lang, brand_tone, batch_num, type, provider):
+    return await _translate_openai(strings, target_lang, brand_tone, openai_model_1, batch_num, type, provider)
 
 
-async def translate_openai_2(strings, target_lang, brand_tone):
-    return await _translate_openai(strings, target_lang, brand_tone, openai_model_2)
+async def translate_openai_2(strings, target_lang, brand_tone, batch_num, type, provider):
+    return await _translate_openai(strings, target_lang, brand_tone, openai_model_2, batch_num, type, provider)
 
 
-async def _translate_gemini(strings, target_lang, brand_tone, model):
+async def _translate_gemini(strings, target_lang, brand_tone, model, batch_num, type, provider):
+    MAX_CHARS_PER_TRANSLATE = 20_000  # conservative
+    total_chars = sum(len(s) for s in strings)
+    if total_chars > MAX_CHARS_PER_TRANSLATE:
+        # split into two equal parts
+        if len(strings) > 1:
+            print(f"{total_chars} total characters, Splitting {type} batch {batch_num} due to large size, using {provider}")
+            mid = len(strings) // 2
+            left = await _translate_gemini(strings[:mid], target_lang, brand_tone, model, batch_num, type, provider)
+            right = await _translate_gemini(strings[mid:], target_lang, brand_tone, model, batch_num, type, provider)
+            return left + right
+        else:
+            print(f"{total_chars} total characters, Splitting string of {type} batch {batch_num} due to large size, using {provider}")
+            splitted_strings = strings[0].split(".")
+            mid = len(strings) // 2
+            left = await _translate_gemini(splitted_strings[:mid], target_lang, brand_tone, model, batch_num, type, provider)
+            right = await _translate_gemini(splitted_strings[mid:], target_lang, brand_tone, model, batch_num, type, provider)
+            result = left + right
+            return ["".join(result)]
+    
     prompt = f"""
     You are a professional translator.
 
@@ -517,12 +560,12 @@ async def _translate_gemini(strings, target_lang, brand_tone, model):
         else:
             raise ValueError("Unexpected Gemini response")
     except Exception as e:
-        print(f"⚠ Parse fallback: {e}")
+        print(f"⚠ Parse fallback {provider} for {type} batch {batch_num}: {e}")
         return [clean_line(line) for line in text.split("\n") if line.strip()]
 
 
-async def translate_gemini_1(strings, target_lang, brand_tone):
-    return await _translate_gemini(strings, target_lang, brand_tone, gemini_model_1)
+async def translate_gemini_1(strings, target_lang, brand_tone, batch_num, type, provider):
+    return await _translate_gemini(strings, target_lang, brand_tone, gemini_model_1, batch_num, type, provider)
 
 
 # async def translate_gemini_2(strings, target_lang, brand_tone):
@@ -531,11 +574,10 @@ async def translate_gemini_1(strings, target_lang, brand_tone):
 
 # ===================== BATCH TRANSLATION =====================
 
-async def _translate_batch(indexed_strings, target_lang, brand_tone, batch_num, type, translation_progress=None):
+async def _translate_batch(indexed_strings, target_lang, brand_tone, batch_num, total_batches, type, translation_progress=None, logs={}):
     global model_index_translation
-    # global translation_end
-    # translation_time.append(datetime.now())
     strings = [s for _, s in indexed_strings]
+    logs[f"{type}_{batch_num}"] = {}
     # best_provider = None
     # best_translation = None
     # best_score = float("inf")
@@ -546,18 +588,19 @@ async def _translate_batch(indexed_strings, target_lang, brand_tone, batch_num, 
     models_used = []
 
     async with semaphore_translation:
-        print(f"\n[DEBUG] {type.upper()} Batch {batch_num} → {len(strings)} strings ")
         current_model = translation_model_cycle[model_index_translation % len(translation_model_cycle)]
         model_index_translation += 1
+        logs[f"{type}_{batch_num}"]["print"] = f"\n[DEBUG] {type.upper()} Batch {batch_num}/{total_batches} via {current_model} → {len(strings)} strings"
+        print(logs[f"{type}_{batch_num}"]["print"])
 
         try:
             start = time.time()
             if current_model == "openai1":
-                translations = await with_retry(translate_openai_1, strings, target_lang, brand_tone, provider=current_model)
+                translations = await with_retry(translate_openai_1, strings, target_lang, brand_tone, batch_num, provider=current_model, type=type)
             elif current_model == "openai2":
-                translations = await with_retry(translate_openai_2, strings, target_lang, brand_tone, provider=current_model)
+                translations = await with_retry(translate_openai_2, strings, target_lang, brand_tone, batch_num, provider=current_model, type=type)
             else:
-                translations = await with_retry(translate_gemini_1, strings, target_lang, brand_tone, provider=current_model)
+                translations = await with_retry(translate_gemini_1, strings, target_lang, brand_tone, batch_num, provider=current_model, type=type)
 
             elapsed = time.time() - start
             # rough estimate if API doesn’t return usage
@@ -567,7 +610,8 @@ async def _translate_batch(indexed_strings, target_lang, brand_tone, batch_num, 
             models_used.append(current_model)
 
         except Exception as e:
-            print(f"⚠ {current_model} failed, falling back: {e}")
+            logs[f"{type}_{batch_num}"]["exc1"] = f"⚠ {current_model} failed, falling back: {e}"
+            print(logs[f"{type}_{batch_num}"]["exc1"])
             for alt in translation_model_cycle:
                 current_model = alt
                 if current_model in models_used:
@@ -575,11 +619,11 @@ async def _translate_batch(indexed_strings, target_lang, brand_tone, batch_num, 
                 try:
                     start = time.time()
                     if current_model == "openai1":
-                        translations = await translate_openai_1(strings, target_lang, brand_tone)
+                        translations = await translate_openai_1(strings, target_lang, brand_tone, batch_num, type, provider=current_model)
                     elif current_model == "openai2":
-                        translations = await translate_openai_2(strings, target_lang, brand_tone)
+                        translations = await translate_openai_2(strings, target_lang, brand_tone, batch_num, type, provider=current_model)
                     else:
-                        translations = await translate_gemini_1(strings, target_lang, brand_tone)
+                        translations = await translate_gemini_1(strings, target_lang, brand_tone, batch_num, type, provider=current_model)
 
                     models_used.append(current_model)
 
@@ -590,7 +634,8 @@ async def _translate_batch(indexed_strings, target_lang, brand_tone, batch_num, 
                         {"tokens": tokens_used, "time": elapsed})
                     break
                 except Exception as e2:
-                    print(f"⚠ Fallback {current_model} also failed: {e2}")
+                    logs[f"{type}_{batch_num}"]["exc2"] = f"⚠ Fallback {current_model} also failed: {e2}"
+                    print(logs[f"{type}_{batch_num}"]["exc2"])
             else:
                 raise Exception("All providers failed!")
             
@@ -601,19 +646,21 @@ async def _translate_batch(indexed_strings, target_lang, brand_tone, batch_num, 
             if expected == got:
                 if translation_progress is not None:
                         translation_progress["valid"] += 1
-                        print(f"[TRANSLATION PROGRESS: valid] {translation_progress['valid']} valid, {translation_progress['partial']} partial, total {translation_progress['valid']+translation_progress['partial']} ({type} batch via {current_model})")
-                # translation_end = datetime.now()
+                        logs[f"{type}_{batch_num}"]["valid"] = f"[TRANSLATION PROGRESS: valid] {translation_progress['valid']} valid, {translation_progress['partial']} partial, total {translation_progress['valid']+translation_progress['partial']}/{translation_progress['total']} ({type} batch {batch_num} via {current_model})"
+                        print(logs[f"{type}_{batch_num}"]["valid"])
                 return [(i, t) for (i, _), t in zip(indexed_strings, translations)]
 
             # --- FIX: force align translations ---
             elif got < expected:
                 # Pad missing with originals
-                print(f"Expected {expected}, got {got} -> Padding {expected-got} from original batch")
+                logs[f"{type}_{batch_num}"]["padding"] = f"Expected {expected}, got {got} -> Padding {expected-got} from original batch"
+                print(logs[f"{type}_{batch_num}"]["padding"])
                 translations.extend(strings[got:])
             else: # got > expected
                 # Trim extras
                 translations = translations[:expected]
-                print(f"Expected {expected}, got {got} -> Truncating {got-expected} from translation batch")
+                logs[f"{type}_{batch_num}"]["truncation"] = f"Expected {expected}, got {got} -> Truncating {got-expected} from translation batch"
+                print(logs[f"{type}_{batch_num}"]["truncation"])
 
             # Record mismatch stats
             if expected != got:
@@ -627,8 +674,8 @@ async def _translate_batch(indexed_strings, target_lang, brand_tone, batch_num, 
                 
             if translation_progress is not None:
                 translation_progress["partial"] += 1
-                print(f"[TRANSLATION PROGRESS: partial] {translation_progress['valid']} valid, {translation_progress['partial']} partial, total {translation_progress['valid']+translation_progress['partial']} ({type} batch via {current_model})")
-            # translation_end = datetime.now()
+                logs[f"{type}_{batch_num}"]["partial"] = f"[TRANSLATION PROGRESS: partial] {translation_progress['valid']} valid, {translation_progress['partial']} partial, total {translation_progress['valid']+translation_progress['partial']}/{translation_progress['total']} ({type} batch {batch_num} via {current_model})"
+                print(logs[f"{type}_{batch_num}"]["partial"])
             return [(i, t) for (i, _), t in zip(indexed_strings, translations)]
 
 
@@ -696,6 +743,65 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
             for i, item in enumerate(d):
                 collect_strings(item, path + [i], parent_key)
 
+    # Splittter for strings using regex
+    def split_into_chunks(text, max_len=3000):
+        """
+        Split text into chunks of <= max_len, trying to split at '.' boundaries.
+        """
+        sentences = re.split(r'(?<=[.?!])\s+', text)  # split by sentence enders
+        chunks, current = [], ""
+
+        for sentence in sentences:
+            # if adding sentence exceeds max_len → push current chunk
+            if len(current) + len(sentence) + 1 > max_len:
+                if current:
+                    chunks.append(current.strip())
+                current = sentence
+            else:
+                current += (" " if current else "") + sentence
+
+        if current:
+            chunks.append(current.strip())
+
+        return chunks
+
+    # Splitting large strings into chunks
+    def expand_strings(strings, max_len=3000):
+        """
+        Expand long strings into chunks inside the main list.
+        Returns (expanded_list, mapping) for later reconstruction.
+        """
+        expanded = []
+        mapping = []  # (original_index, number_of_chunks)
+        counter = 0
+
+        for idx, text in enumerate(strings):
+            if len(text) > max_len:
+                counter += 1
+                chunks = split_into_chunks(text, max_len)
+                expanded.extend(chunks)
+                mapping.append((idx, len(chunks)))
+                print(f"Splitting string on index {idx} into {len(chunks)} parts")
+            else:
+                expanded.append(text)
+                mapping.append((idx, 1))
+        
+        return expanded, mapping
+
+    # Recombine splitted strings with mapper
+    def collapse_strings(processed_expanded, mapping):
+        """
+        Collapse processed expanded list back to original structure.
+        """
+        collapsed = []
+        pos = 0
+        for idx, count in mapping:
+            merged = " ".join(processed_expanded[pos:pos+count])
+            collapsed.append(merged)
+            pos += count
+            print(f"String at index {idx} recombined by joining {count} strings")
+        return collapsed
+    
 
     collect_strings(target_data)
 
@@ -709,77 +815,137 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
     
     print(f"Total words in a string: {counter}")
 
-    batches = [list(enumerate(strings_to_translate[i:i+BATCH_SIZE], i))
-    for i in range(0, len(strings_to_translate), BATCH_SIZE)]
+    
+    expanded, mapping = expand_strings(strings_to_translate, max_len=5000)
+    strings_to_classify = [(i, s) for i, s in enumerate(expanded)]
 
+    # ---- SAVE EXTRACTED ----
+    extracted_log = [{"path": p, "string": s} for _, s, p in positions]
+    extracted_file = os.path.join(
+        LOG_DIR, f"extracted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    with open(extracted_file, "w", encoding="utf-8") as f:
+        json.dump(extracted_log, f, ensure_ascii=False, indent=2)
+    print(f"Saved extracted strings to {extracted_file}")
 
-    classification_progress = {"valid": 0, "partial": 0, "total": len(batches)}
-    translation_progress = {"valid": 0, "partial": 0, "total": len(batches)}
-    batch_num = translation_progress["valid"] + translation_progress["partial"]
+    def serialize_batches(batches, batch_type):
+        serialized = []
+        for b_idx, batch in enumerate(batches, start=1):
+            serialized.append({
+                "batch_num": b_idx,
+                "type": batch_type,
+                "items": [
+                    {"index": i, "string": s} for (i, s) in batch
+                ]
+            })
+        return serialized
 
+    # ---- TRANSLATE ----
+    batches = [strings_to_classify[i:i+CLASSIFICATION_BATCH_SIZE]
+               for i in range(0, len(strings_to_classify), CLASSIFICATION_BATCH_SIZE)]
+    total_batches = len(batches)
 
-    classification_tasks = [_classify_batch(batch, idx+1, len(batches), classification_progress) for idx, batch in enumerate(batches)]
-
-
-    business_buffer, ordinary_buffer = [], []
-    translation_tasks = []
     start = datetime.now()
 
+    classification_progress = {"valid": 0, "partial": 0, "total": total_batches}
 
+    # Run classifications in parallel
+    classification_tasks = []
+    
+    for idx, batch in enumerate(batches):
+        classification_tasks.append(_classify_batch(batch, idx+1, total_batches, classification_progress=classification_progress))
+    
+    # all_classification_results = await asyncio.gather(*classification_tasks)
+
+    results = []
     for coro in asyncio.as_completed(classification_tasks):
-        results = await coro
-        for i, l in results: # type: ignore
-            s = strings_to_translate[i]
-            if l == "business":
-                business_buffer.append((i, s))
-            else:
-                ordinary_buffer.append((i, s))
+        res = await coro
+        results.append(res)
+    all_classification_results = results
 
+    # Flatten list of lists into a single list
+    final_classification_pairs = [item
+              for sublist in all_classification_results
+              for item in sublist]
+    
+    # ---------- RECOMBINE ----------
+    final_results = [l for _, l in sorted(final_classification_pairs, key=lambda x: x[0])]
 
-        while len(business_buffer) >= BATCH_SIZE:
-            batch = business_buffer[:BATCH_SIZE]
-            business_buffer = business_buffer[BATCH_SIZE:]
-            translation_tasks.append(asyncio.create_task(
-            _translate_batch(batch, target_lang, brand_tone, batch_num+1, "business", translation_progress)
-            ))
+    classified = [(i, s, l)
+                  for i, (s, l) in enumerate(zip(expanded, final_results))]
 
+    # STEP 2: Split into two groups, preserving index
+    business_items = [(i, s) for i, s, l in classified if (l.strip().lower()) == "business"]
+    ordinary_items = [(i, s) for i, s, l in classified if (l.strip().lower()) == "ordinary"]
 
-        while len(ordinary_buffer) >= BATCH_SIZE:
-            batch = ordinary_buffer[:BATCH_SIZE]
-            ordinary_buffer = ordinary_buffer[BATCH_SIZE:]
-            translation_tasks.append(asyncio.create_task(
-            _translate_batch(batch, target_lang, brand_tone, batch_num+1, "ordinary", translation_progress)
-            ))
+    end = datetime.now()
+    print(f"Total time consumed for classification: {end-start}")
+    print(
+        f"[CLASSIFY] Business: {len(business_items)}, Ordinary: {len(ordinary_items)}")
 
+    # Split into translation batches
+    business_batches = [business_items[i:i+TRANSLATION_BATCH_SIZE]
+                        for i in range(0, len(business_items), TRANSLATION_BATCH_SIZE)]
+    ordinary_batches = [ordinary_items[i:i+TRANSLATION_BATCH_SIZE]
+                        for i in range(0, len(ordinary_items), TRANSLATION_BATCH_SIZE)]
+    
+    print(f"\nTotal {len(business_batches)} Business tasks are created, and {len(ordinary_batches)} Ordinary\n")
 
-    if business_buffer:
-        batch = business_buffer
-        business_buffer = []
-        translation_tasks.append(asyncio.create_task(
-        _translate_batch(business_buffer, target_lang, brand_tone, batch_num+1, "business", translation_progress)
-        ))
-    if ordinary_buffer:
-        batch = ordinary_buffer
-        ordinary_buffer = []
-        translation_tasks.append(asyncio.create_task(
-        _translate_batch(ordinary_buffer, target_lang, brand_tone, batch_num+1, "ordinary", translation_progress)
-        ))
+    business_serialized = serialize_batches(business_batches, "business")
+    ordinary_serialized = serialize_batches(ordinary_batches, "ordinary")
 
+    batches_data = {
+        "business_batches": business_serialized,
+        "ordinary_batches": ordinary_serialized
+    }
+
+    batches_file = os.path.join(LOG_DIR, f"batches_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    with open(batches_file, "w", encoding="utf-8") as f:
+        json.dump(batches_data, f, ensure_ascii=False, indent=2)
+
+    print(f"Saved batches to {batches_file}")
+
+    translation_progress = {"valid": 0, "partial": 0, "total": len(
+        business_batches) + len(ordinary_batches)}
+
+    # Run translations in parallel
+    start = datetime.now()
+    translation_tasks = []
+    logs = {}
+
+    for idx, batch in enumerate(business_batches):
+        translation_tasks.append(_translate_batch(batch, target_lang, brand_tone, idx+1,
+                     len(business_batches), type="business", translation_progress=translation_progress, logs=logs))
+
+    for idx, batch in enumerate(ordinary_batches):
+        translation_tasks.append(_translate_batch(batch, target_lang, brand_tone, idx+1,
+                     len(ordinary_batches), type="ordinary", translation_progress=translation_progress, logs=logs))
+
+    random.shuffle(translation_tasks)
+
+    # all_translation_results = await asyncio.gather(*translation_tasks)
 
     results = []
     for coro in asyncio.as_completed(translation_tasks):
-        batch = await coro
-        if batch is not None:
-            results.extend(batch)
-    # results = await asyncio.gather(*translation_tasks)
+        res = await coro
+        results.append(res)
+    all_translation_results = results
 
-    final_translation_pairs = results
+    
+    with open(console_file, "a", encoding="utf-8") as f:
+        json.dump(logs, f, ensure_ascii=False, indent=4)
+
+
+    # Flatten already-indexed results
+    final_translation_pairs = [pair
+                   for batch in all_translation_results
+                   if batch is not None
+                   for pair in batch]
+
+    # ---------- RECOMBINE ----------
     final_results = [t for _, t in sorted(final_translation_pairs, key=lambda x: x[0])]
-
-
-    print()
-    print(f"Total time used for classification and translation: {datetime.now()-start}")
-    print()
+    final_results = collapse_strings(final_results, mapping)
+    end = datetime.now()
+    print(f"Total time consumed for translation: {end-start}")
 
     comparative_file = os.path.join(LOG_DIR, "comparative.json")
     with open(comparative_file, "w", encoding="utf-8") as f:
