@@ -245,9 +245,10 @@ async def _classify_openai(strings_batch, batch_num, total_batches, classificati
     )
 
     labels_text: str = resp.choices[0].message.content  # type: ignore
-    # print(f"[DEBUG] Classify batch {batch_num}/{total_batches} → {len(strings_batch)} strings, chars={total_chars}")
-    # Ensure only valid labels
-    # VALID_LABELS = {"ordinary", "business"}
+    labels_text = labels_text.strip()
+    if labels_text.startswith("```"):
+        labels_text = re.sub(r"^```[a-zA-Z]*", "", labels_text)
+        labels_text = labels_text.strip("`").strip()
     try:
         data = json.loads(labels_text)
         if isinstance(data, dict) and "classified_labels" in data:
@@ -319,6 +320,10 @@ async def _classify_gemini(strings_batch, batch_num, total_batches, classificati
         generation_config={"response_mime_type": "application/json"}
     )
     labels_text = resp.text or "[]"
+    labels_text = labels_text.strip()
+    if labels_text.startswith("```"):
+        labels_text = re.sub(r"^```[a-zA-Z]*", "", labels_text)
+        labels_text = labels_text.strip("`").strip()
     try:
         data = json.loads(labels_text)
         if isinstance(data, dict) and "classified_labels" in data:
@@ -473,6 +478,10 @@ async def _translate_openai(strings, target_lang, brand_tone, model, batch_num, 
     )
 
     content = resp.choices[0].message.content
+    content = content.strip()
+    if content.startswith("```"):
+        content = re.sub(r"^```[a-zA-Z]*", "", content)
+        content = content.strip("`").strip()
     try:
         data = json.loads(content)  # type: ignore
         if isinstance(data, dict) and "translations" in data:
@@ -550,9 +559,13 @@ async def _translate_gemini(strings, target_lang, brand_tone, model, batch_num, 
         prompt,
         generation_config={"response_mime_type": "application/json"}
     )
-    text = resp.text or "[]"
+    content = resp.text or "[]"
+    content = content.strip()
+    if content.startswith("```"):
+        content = re.sub(r"^```[a-zA-Z]*", "", content)
+        content = content.strip("`").strip()
     try:
-        data = json.loads(text)
+        data = json.loads(content)
         if isinstance(data, dict) and "translations" in data:
             return [clean_line(x) for x in data["translations"]]
         elif isinstance(data, list):
@@ -561,7 +574,7 @@ async def _translate_gemini(strings, target_lang, brand_tone, model, batch_num, 
             raise ValueError("Unexpected Gemini response")
     except Exception as e:
         print(f"⚠ Parse fallback {provider} for {type} batch {batch_num}: {e}")
-        return [clean_line(line) for line in text.split("\n") if line.strip()]
+        return [clean_line(line) for line in content.split("\n") if line.strip()]
 
 
 async def translate_gemini_1(strings, target_lang, brand_tone, batch_num, type, provider):
