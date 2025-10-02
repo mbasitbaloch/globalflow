@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Body, HTTPException
 import requests
 from ..database import SessionLocal
 # from ..models import Translation
-from ..services.translator import fast_translate_json
+from ..services.translator5 import fast_translate_json
 # from ..mongodb import users_collection
 # from fastapi.responses import JSONResponse, FileResponse
 # from qdrant_client import QdrantClient
