@@ -4,7 +4,7 @@ from ..database import SessionLocal
 from .. import models
 from ..workers.tasks import generate_embedding
 from ..services.rag import embed_and_store
-from ..services.translator5 import fast_translate_json
+from ..services.translator import fast_translate_json
 from fastapi import BackgroundTasks
 
 router = APIRouter()
