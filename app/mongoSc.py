@@ -30,3 +30,4 @@ class User(BaseModel):
     createdAt: datetime
     updatedAt: datetime
     v: int = Field(alias="__v")
+    country: Optional[str] = None

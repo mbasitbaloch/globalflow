@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .routes import translate, ingest
 from .routes import hs_users
 from .database import Base, engine
+from app.models import Translation
 import sentry_sdk
 
 sentry_sdk.init(

@@ -10,7 +10,7 @@ import os
 client = QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
 
 # OpenAI embeddings model (small = fast, large = better accuracy)
-embedding_model = OpenAIEmbeddings(model="text-embedding-3-small")
+embedding_model = OpenAIEmbeddings(api_key=settings.OPENAI_API_KEY_1, model="text-embedding-3-small")
 collection_name = os.getenv("COLLECTION_NAME")
 
 # Recreate / ensure collection exists
