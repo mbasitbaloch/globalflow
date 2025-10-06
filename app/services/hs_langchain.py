@@ -1,184 +1,142 @@
 from langchain_core.prompts import PromptTemplate, FewShotPromptTemplate
-from qdrant_client.http import models
 from app.config import settings
 from dataclasses import dataclass
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.output_parsers import JsonOutputParser, BaseOutputParser
 from typing import List
 import json
+import re
 
 
-def fewshotTranslation(llm, qdrant, query):
-    scroll_results, _ = qdrant.scroll(
-        collection_name=settings.COLLECTION_NAME,
-        scroll_filter=models.Filter(
-            must=[
-                models.FieldCondition(
-                    key="shopDomain",
-                    match=models.MatchValue(value=query.shopDomain)
-                ),
-                models.FieldCondition(
-                    key="targetLanguage",
-                    match=models.MatchValue(value=query.targetLanguage)
-                ),
-                models.FieldCondition(
-                    key="region",
-                    match=models.MatchValue(value=query.region)
-                )
-            ]
-        ),
-        with_payload=True,
-        limit=1
+async def promptClassification(llm, strings_batch):
+    prompt_template = PromptTemplate.from_template("""
+    You are a strict text classifier.
+
+    Categories:
+    - "business" = official, legal, contractual, financial, invoices, policies, compliance, formal system messages.
+    - "ordinary" = product marketing, casual phrases, blogs, general UI text, everyday communication.
+    Never invent new categories; only use "business" or "ordinary".
+
+    Rules:
+    - Classify each string into exactly ONE category.
+    - The number of output labels MUST equal the number of input strings ({num_strings}).
+    - Keep the order of outputs identical to the order of inputs.
+
+    Examples:
+    Input: ["Invoice #4533", "Big summer sale!", "Refunds will be processed within 7 days", "Sign In"]
+    Output: ["business", "ordinary", "business", "ordinary"]
+
+    Input: ["Terms and Conditions apply", "Export License Required", "Check out our new arrivals", "Best quality leather shoes"]
+    Output: ["business", "business", "ordinary", "ordinary"]
+
+    Now classify these {num_strings} strings:
+    {strings_batch}
+
+    IMPORTANT:
+    Respond with ONLY a valid JSON array of {num_strings} strings. No extra text.
+    """
     )
 
-    original_text = None
-    translated_text = None
-    for point in scroll_results:
-        original_text = json.dumps(point.payload.get("original_text"), indent=4, ensure_ascii=False) if point.payload is not None else None
-        translated_text = json.dumps(point.payload.get("translated_text"), indent=4, ensure_ascii=False) if point.payload is not None else None
+    chain = prompt_template | llm | JsonOutputParser()
+    response = await chain.ainvoke({
+        "strings_batch": json.dumps(strings_batch, ensure_ascii=False),
+        "num_strings": len(strings_batch)
+    })
 
-    original_text = original_text.replace("{", "{{").replace("}", "}}") if original_text is not None else ""
-    translated_text = translated_text.replace("{", "{{").replace("}", "}}") if translated_text is not None else ""
+    return [x.strip().lower() for x in response]
 
-    example = {
-        "original": original_text[:len(original_text)//4],
-        "translated": translated_text[:len(translated_text)//4],
-    }
 
-    print("Example is created!")
 
+async def fewshotTranslation(examples, llm, query, SafeJsonParser):
     example_template = """
     Original: {original}
     Translated: {translated}
     """
 
-    print("Example template is created!")
+    # print("Example template is created!")
 
     example_prompt = PromptTemplate(
         input_variables=["original", "translated"],
         template=example_template,
     )
 
-    print("Example prompt is created!")
+    # print("Example prompt is created!")
 
     fewshot_prompt = FewShotPromptTemplate(
         example_prompt=example_prompt,
-        examples=[example],
+        examples=examples,
         prefix="""
-        Translate the following strings into {targetLanguage}, adapted for the {region} region.
-        Maintain the brand tone as {brandTone}.
-        ⚠ If a string contains HTML tags (<p>, <div>, <br>, etc.), keep the tags exactly as they are,
-        and only translate the inner text.
-        Ensure cultural and linguistic nuances are appropriate for {region}.
-        Return ONLY translations line by line, in the same order:
+        You are a professional translator.
+
+        Task:
+        Translate the following {num_strings} strings into {targetLanguage}.
+        - Maintain the brand tone as '{brandTone}'.
+        - Adapt translations to the industrial domain '{industry}'.
+          Use terminology, phrasing, and style that are natural and widely used in this domain.
+        - If a string contains HTML tags (<p>, <div>, <br>, etc.), KEEP the tags unchanged, only translate the inner text.
+        - Preserve placeholders (e.g., {{name}}, %s, {{0}}) exactly as they are. Translate surrounding text but do NOT translate or modify the text inside placeholders.
+        - Do NOT merge, omit, or add strings.
+        - Translate long texts fully (no summarization).
+        - Language code rule: if a string is a language code (e.g., "en"), replace it with the correct code for {targetLanguage}.
+        Example: "en" → "fr" when {targetLanguage} is French.
+
+        Output requirements:
+        - Return ONLY valid JSON.
+        - JSON must be an array of exactly {num_strings} strings.
+        - Order must match the input order.
+        - No comments, no explanations, no extra text.
+
+        Input strings:
+        {input}
+
+        Output format (strict):
+        [
+        "translation of string 1",
+        "translation of string 2",
+        ...
+        ]
         """,
-        suffix="Source: {input}\nTranslated:",
-        input_variables=["input", "targetLanguage", "brandTone", "region"],
+        suffix="Source:\n{input}\nTranslated:",
+        input_variables=["input", "targetLanguage", "brandTone", "industry", "num_strings"],
     )
 
-    print(f"Fewshot prompt template is created!\n{fewshot_prompt}")
-    print("Fewshot prompt is created!")
+    # print(f"Fewshot prompt template is created!\n{fewshot_prompt}")
+    # print("Fewshot prompt is created!")
 
-    print("Expected variables:", fewshot_prompt.input_variables)
+    # print("Expected variables:", fewshot_prompt.input_variables)
 
 
-    chain = fewshot_prompt | llm |StrOutputParser()
+    chain = fewshot_prompt | llm | SafeJsonParser()
 
-    print("Chain is created!")
-
-        # 🔹 Handle list input
+    # print("Chain is created!")
     input_text = query.input
-    if isinstance(input_text, list):
-        # Join into newline-separated block for the model
-        input_text = "\n".join(input_text)
 
-    response = chain.invoke({
-        "input": query.input,
+    response = await chain.ainvoke({
+        "input": json.dumps(input_text, ensure_ascii=False),
         "targetLanguage": query.targetLanguage,
         "brandTone": query.brandTone,
-        "region": query.region
+        "industry": query.industry,
+        "num_strings": len(input_text),
     })
 
-    print("Response is created!")
-    
-    try:
-        translations = json.loads(response)
-    except Exception:
-        translations = response.split("\n")
+    # print("Response is created!")
 
-    return translations
-
-def fewshotCategorization(llm, text):
-    example = [
-        {"text": "Blue cotton T-Shirt", "label": "ordinary"},
-        {"text": "Add to Cart", "label": "ordinary"},
-        {"text": "Best quality leather shoes", "label": "ordinary"},
-        {"text": "Customer Privacy Policy", "label": "business"},
-        {"text": "Refunds will be processed within 7 days", "label": "business"},
-        {"text": "Continue Shopping", "label": "ordinary"},
-        {"text": "Wholesale Pricing Available", "label": "business"},
-        {"text": "Track Your Order", "label": "ordinary"},
-        {"text": "Terms & Conditions apply", "label": "business"},
-        {"text": "New Summer Collection", "label": "ordinary"},
-        {"text": "Business Invoice Download", "label": "business"},
-        {"text": "Proceed to Checkout", "label": "ordinary"},
-        {"text": "This product is covered by a 1-year warranty", "label": "business"},
-        {"text": "Flash Sale: Up to 50% off", "label": "ordinary"},
-        {"text": "Compliance with EU regulations", "label": "business"},
-        {"text": "Sign In", "label": "ordinary"},
-        {"text": "Corporate Account Registration", "label": "business"},
-        {"text": "View Cart", "label": "ordinary"},
-        {"text": "Export License Required", "label": "business"},
-        {"text": "Shop Now", "label": "ordinary"},
-        ]
-
-    example_template = """
-    Text: {text}
-    Category: {label}
-    """
-
-    example_prompt = PromptTemplate(
-        input_variables=["text", "label"],
-        template=example_template,
-    )
-
-    fewshot_prompt = FewShotPromptTemplate(
-        example_prompt=example_prompt,
-        examples=example,
-        prefix="""You are a text classifier. 
-        Classify each input string into one of two categories:
-        
-        - "business" → official, professional, legal, formal, or business-related.
-        - "ordinary" → casual, personal, everyday language.
-        
-        Here are some examples:""",
-        suffix="\nText: {text}\nCategory:",
-        input_variables=["text"]
-    )
-
-    chain = fewshot_prompt | llm
-
-    response = chain.invoke({
-        "text": text,
-    })
-
-    return response.content.strip().lower()
-
-
-def stringCategorize(llm, _strings_to_translate):
-    text_to_translate = {"business": [], "ordinary": []}
-    for s in _strings_to_translate:
-        response = fewshotCategorization(llm, s)
-        if response == "business":
-            text_to_translate["business"].append(s)
-        else:
-            text_to_translate["ordinary"].append(s)
-    return text_to_translate
+    return response
 
 
 @dataclass
 class TranslationQuery:
-    shopDomain: str
     input: List[str]
+    user_id: str
+    shopDomain: str
     targetLanguage: str
     brandTone: str
-    region: str
+    industry: str
+    num_strings: int
+
+class SafeJsonParser(BaseOutputParser):
+    def parse(self, text: str):
+        text = text.strip()
+        text = re.sub(r"^```(?:json|json5|javascript)?\s*", "", text)
+        text = re.sub(r"```$", "", text)
+        text = text.strip()
+        return json.loads(text)
