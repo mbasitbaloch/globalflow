@@ -12,7 +12,7 @@ from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from ..config import settings
 from qdrant_client import QdrantClient
-from app.services.hs_langchain import fewshotTranslation, TranslationQuery, promptClassification, SafeJsonParser
+from app.services.hs_langchain import fewshotTranslation, TranslationQuery, promptClassification, voteClassification, SafeJsonParser
 from ..utils.tasks import store_examples
 from pydantic import SecretStr
 from qdrant_client.http import models
@@ -74,7 +74,7 @@ langchain_openai_2 = ChatOpenAI(
 langchain_gemini_1 = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash-lite",
     temperature=0.7,
-    google_api_key=settings.GEMINI_API_KEY_1  # 👈 pass here
+    google_api_key=settings.GEMINI_API_KEY_1
 )
 
 # openai_model_1 = AsyncOpenAI(
@@ -104,12 +104,18 @@ qdrant = QdrantClient(
 CLASSIFICATION_BATCH_SIZE = 50
 MAX_CONCURRENCY_CLASSIFICATION = 20
 semaphore_classification = asyncio.Semaphore(MAX_CONCURRENCY_CLASSIFICATION)
+VOTING_BATCH_SIZE = 50
+MAX_CONCURRENCY_VOTING = 20
+semaphore_voting = asyncio.Semaphore(MAX_CONCURRENCY_VOTING)
 TRANSLATION_BATCH_SIZE = 50
 MAX_CONCURRENCY_TRANSLATION = 20
 semaphore_translation = asyncio.Semaphore(MAX_CONCURRENCY_TRANSLATION)
 
 classification_model_cycle = ["openai1", "openai2", "gemini1"]
 model_index_classify = 0
+
+voting_model_cycle = ["openai1", "openai2"]
+model_index_voting = 0
 
 translation_model_cycle = ["openai1", "openai2", "gemini1"]
 model_index_translation = 0
@@ -191,6 +197,10 @@ async def with_retry(fn, *args, retries=3, **kwargs):
     type = kwargs.get("type", "N/A")
     for i in range(retries):
         try:
+            # filtered_kwargs = {
+            #     k: v for k, v in kwargs.items()
+            #     if k not in ("provider", "batch_num", "type")
+            # }
             return await fn(*args, **kwargs)
         except Exception as e:
             if "Rate limit" in str(e) or "quota" in str(e).lower():
@@ -292,190 +302,42 @@ def qdrant_examples(shopDomain, targetLanguage, user_id):
     return examples
 
 # # ===================== CLASSIFICATION FUNCTIONS =====================
-async def _classify_openai(strings_batch, batch_num, total_batches, classification_model, provider, type):
+async def _classify_openai(strings_batch, classification_model):
     """
     Classify strings into 'business' or 'ordinary'.
     """
-
-    # MAX_CHARS_PER_CLASSIFY = 50_000  # conservative
-    # total_chars = sum(len(s) for s in strings_batch)
-    # if total_chars > MAX_CHARS_PER_CLASSIFY and len(strings_batch) > 1:
-    #     # split into two equal parts
-    #     print(f"{total_chars//4} total tokens, Splitting batch due to large size")
-    #     mid = len(strings_batch) // 2
-    #     left = await _classify_openai(strings_batch[:mid], batch_num, total_batches, classification_model, provider, type)
-    #     right = await _classify_openai(strings_batch[mid:], batch_num, total_batches, classification_model, provider, type)
-    #     return left + right
     
     labels = await promptClassification(classification_model, strings_batch)
-    return [clean_line(x) for x in labels]
-
-    # prompt = f"""
-    # You are a strict text classifier.
-
-    # Categories:
-    # - "business" = official, legal, contractual, financial, invoices, policies, compliance, formal system messages.
-    # - "ordinary" = product marketing, casual phrases, blogs, general UI text, everyday communication.
-    # Never invent new categories; only use "business" or "ordinary".
-
-    # Rules:
-    # - Classify each string into exactly ONE category.
-    # - The number of output labels MUST equal the number of input strings ({len(strings_batch)}).
-    # - Keep the order of outputs identical to the order of inputs.
-
-    # Examples:
-    # Input: ["Invoice #4533", "Big summer sale!", "Refunds will be processed within 7 days", "Sign In"]
-    # Output: ["business", "ordinary", "business", "ordinary"]
-
-    # Input: ["Terms and Conditions apply", "Export License Required", "Check out our new arrivals", "Best quality leather shoes"]
-    # Output: ["business", "business", "ordinary", "ordinary"]
-
-    # Now classify these {len(strings_batch)} strings:
-    # {json.dumps(strings_batch, ensure_ascii=False)}
-
-    # IMPORTANT:
-    # Respond with ONLY a valid JSON array of {len(strings_batch)} strings. No extra text.
-    # """
-
-    # resp = await classification_model.chat.completions.create(
-    #     model="gpt-4.1-mini", # gpt-4o-mini # gpt-4.1-mini
-    #     messages=[{"role": "user", "content": prompt}],  # type: ignore
-    #     temperature=0.7,
-    #     response_format={
-    #         "type": "json_schema",
-    #         "json_schema": {
-    #             "name": "classification_labels",
-    #             "schema": {
-    #                 "type": "object",
-    #                 "properties": {
-    #                     "classified_labels": {
-    #                         "type": "array",
-    #                         "items": {"type": "string", "enum": ["business", "ordinary"]},
-    #                         "minItems": len(strings_batch),
-    #                         "maxItems": len(strings_batch)
-    #                     }
-    #                 },
-    #                 "required": ["classified_labels"],
-    #                 "additionalProperties": False
-    #             },
-    #         },
-    #     }
-    # )
-
-    # labels_text: str = resp.choices[0].message.content
-    # labels_text = labels_text.strip()
-    # if labels_text.startswith("```"):
-    #     labels_text = re.sub(r"^```[a-zA-Z]*", "", labels_text)
-    #     labels_text = labels_text.strip("`").strip()
-    # try:
-    #     data = json.loads(labels_text)
-    #     if isinstance(data, dict) and "classified_labels" in data:
-    #         return [clean_line(x.lower()) for x in data["classified_labels"]]
-    #     elif isinstance(data, list):
-    #         return [clean_line(x.lower()) for x in data]
-    #     else:
-    #         raise ValueError("Unexpected OpenAI response")
-    #     # labels = data.get("classified_labels", [])
-    #     # labels = [l if l in VALID_LABELS else "ordinary" for l in labels]
-    #     # return labels
-    # except Exception as e:
-    #     print(f"⚠ Parse fallback {provider} for {type} batch {batch_num}: {e}")
-    #     return [line.strip().lower() for line in labels_text.split("\n") if line.strip()]
-    #     # labels = [l if l in VALID_LABELS else "ordinary" for l in labels]
-    #     # return labels
+    return [clean_line(label) for label in labels]
 
 
-async def classify_openai_1(strings_batch, batch_num, total_batches, provider, type):
-    return await _classify_openai(strings_batch, batch_num, total_batches, langchain_openai_1, provider, type)
+async def classify_openai_1(strings_batch, *args, **kwargs):
+    return await _classify_openai(strings_batch, langchain_openai_1)
 
 
-async def classify_openai_2(strings_batch, batch_num, total_batches, provider, type):
-    return await _classify_openai(strings_batch, batch_num, total_batches, langchain_openai_2, provider, type)
+async def classify_openai_2(strings_batch, *args, **kwargs):
+    return await _classify_openai(strings_batch, langchain_openai_1)
 
 
-async def _classify_gemini(strings_batch, batch_num, total_batches, classification_model, provider, type):
+async def _classify_gemini(strings_batch, classification_model):
     """
     Classify strings into 'business' or 'ordinary'.
     """
-
-    # MAX_CHARS_PER_CLASSIFY = 50_000  # conservative
-    # total_chars = sum(len(s) for s in strings_batch)
-    # if total_chars > MAX_CHARS_PER_CLASSIFY and len(strings_batch) > 1:
-    #     # split into two equal parts
-    #     print(f"{total_chars//4} total tokens, Splitting batch due to large size")
-    #     mid = len(strings_batch) // 2
-    #     left = await _classify_gemini(strings_batch[:mid], batch_num, total_batches, classification_model, provider, type)
-    #     right = await _classify_gemini(strings_batch[mid:], batch_num, total_batches, classification_model, provider, type)
-    #     return left + right
     
     labels = await promptClassification(classification_model, strings_batch)
-    return [clean_line(x) for x in labels]
-
-    # prompt = f"""
-    # You are a strict text classifier.
-
-    # Categories:
-    # - "business" = official, legal, contractual, financial, invoices, policies, compliance, formal system messages.
-    # - "ordinary" = product marketing, casual phrases, blogs, general UI text, everyday communication.
-    # Never invent new categories; only use "business" or "ordinary".
-
-    # Rules:
-    # - Classify each string into exactly ONE category.
-    # - The number of output labels MUST equal the number of input strings ({len(strings_batch)}).
-    # - Keep the order of outputs identical to the order of inputs.
-
-    # Examples:
-    # Input: ["Invoice #4533", "Big summer sale!", "Refunds will be processed within 7 days", "Sign In"]
-    # Output: ["business", "ordinary", "business", "ordinary"]
-
-    # Input: ["Terms and Conditions apply", "Export License Required", "Check out our new arrivals", "Best quality leather shoes"]
-    # Output: ["business", "business", "ordinary", "ordinary"]
-
-    # Now classify these {len(strings_batch)} strings:
-    # {json.dumps(strings_batch, ensure_ascii=False)}
-
-    # IMPORTANT:
-    # Respond with ONLY a valid JSON object with a key "classified_labels" mapping to an array of {len(strings_batch)} strings. No extra text.
-    # """
-    # # resp = await classification_model.generate_content_async(prompt, generation_config={"response_mime_type": "application/json"})
-    # resp = await asyncio.to_thread(
-    #     classification_model.generate_content,
-    #     prompt,
-    #     generation_config={"response_mime_type": "application/json"}
-    # )
-    # labels_text = resp.text or "[]"
-    # labels_text = labels_text.strip()
-    # if labels_text.startswith("```"):
-    #     labels_text = re.sub(r"^```[a-zA-Z]*", "", labels_text)
-    #     labels_text = labels_text.strip("`").strip()
-    # try:
-    #     data = json.loads(labels_text)
-    #     if isinstance(data, dict) and "classified_labels" in data:
-    #         return [clean_line(x.lower()) for x in data["classified_labels"]]
-    #     elif isinstance(data, list):
-    #         return [clean_line(x.lower()) for x in data]
-    #     else:
-    #         raise ValueError("Unexpected OpenAI response")
-    #     # labels = data.get("classified_labels", [])
-    #     # labels = [l if l in VALID_LABELS else "ordinary" for l in labels]
-    #     # return labels
-    # except Exception as e:
-    #     print(f"⚠ Parse fallback {provider} for {type} batch {batch_num}: {e}")
-    #     return [line.strip().lower() for line in labels_text.split("\n") if line.strip()]
-    #     # labels = [l if l in VALID_LABELS else "ordinary" for l in labels]
-    #     # return labels
+    return [clean_line(label) for label in labels]
 
 
-async def classify_gemini_1(strings_batch, batch_num, total_batches, provider, type):
-    return await _classify_gemini(strings_batch, batch_num, total_batches, langchain_gemini_1, provider, type)
+async def classify_gemini_1(strings_batch, *args, **kwargs):
+    return await _classify_gemini(strings_batch, langchain_gemini_1)
 
 
-# # ===================== BATCH CLASSIFICATION =====================
+# ===================== BATCH CLASSIFICATION =====================
 async def _classify_batch(indexed_strings, batch_num, total_batches, classification_progress=None):
     global model_index_classify
     strings = [s for _, s in indexed_strings]
     classification_model_cycle = ["openai1", "openai2", "gemini1"]
-    VALID_LABELS = {"ordinary", "business"}
+    VALID_LABELS = ["ordinary", "business"]
     raw_ordinary = ["ordinary" for i in range(50)]
     async with semaphore_classification:
         current_model = classification_model_cycle[model_index_classify % len(
@@ -486,11 +348,11 @@ async def _classify_batch(indexed_strings, batch_num, total_batches, classificat
 
         try:
             if current_model == "openai1":
-                result = await with_retry(classify_openai_1, strings, batch_num, total_batches, provider=current_model, type=type)
+                result = await with_retry(classify_openai_1, strings, batch_num, total_batches, provider=current_model)
             elif current_model == "openai2":
-                result = await with_retry(classify_openai_2, strings, batch_num, total_batches, provider=current_model, type=type)
+                result = await with_retry(classify_openai_2, strings, batch_num, total_batches, provider=current_model)
             else:  # gemini1
-                result = await with_retry(classify_gemini_1, strings, batch_num, total_batches, provider=current_model, type=type)
+                result = await with_retry(classify_gemini_1, strings, batch_num, total_batches, provider=current_model)
 
             labels = []
             for l in result:
@@ -527,28 +389,87 @@ async def _classify_batch(indexed_strings, batch_num, total_batches, classificat
             return [(i, l) for (i, _), l in zip(indexed_strings, labels)]
 
 
+# ===================== VOTING FUNCTIONS =====================
+
+async def _vote_openai(strings_batch, voting_model):
+    """
+    Vote classification results.
+    """
+    
+    votes = await voteClassification(voting_model, strings_batch)
+    # return [clean_line(vote) for vote in votes]
+    return votes
+
+
+async def vote_openai_1(strings_batch, *args, **kwargs):
+    return await _vote_openai(strings_batch, langchain_openai_1)
+
+
+async def vote_openai_2(strings_batch, *args, **kwargs):
+    return await _vote_openai(strings_batch, langchain_openai_2)
+
+
+# ===================== VOTE CLASSIFICATION =====================
+
+async def _voting_batch(strings_batch, batch_num, total_batches, voting_progress=None):
+    global model_index_voting
+    strings = [[string, label] for (_, string, label) in strings_batch]
+    voting_model_cycle = ["openai1", "openai2"]
+    # VALID_VOTES = [True, False]
+    raw_votes = [True] * 50
+
+    async with semaphore_voting:
+        current_model = voting_model_cycle[model_index_voting % len(
+            voting_model_cycle)]
+        model_index_voting += 1
+        print(
+            f"\n[DEBUG] Batch {batch_num}/{total_batches} via {current_model} → {len(strings)} strings ")
+
+        try:
+            if current_model == "openai1":
+                result = await with_retry(vote_openai_1, strings, batch_num, total_batches, provider=current_model)
+            else:  # openai2
+                result = await with_retry(vote_openai_1, strings, batch_num, total_batches, provider=current_model)
+
+            votes = []
+            for v in result:
+                if isinstance(v, bool):
+                    votes.append(v)
+                else:
+                    votes.append(True)
+
+        except Exception as e:
+            if voting_progress is not None:
+                voting_progress["partial"] += 1
+                print(f"[VOTING PROGRESS: failed] {voting_progress['valid']} valid, {voting_progress['partial']} partial, total {voting_progress['valid']+voting_progress['partial']}/{voting_progress['total']} (batch {batch_num} via {current_model})")
+            return [(i, v) for (i, _, _), v in zip(strings_batch, raw_votes)]
+
+        if votes:
+            expected = len(strings)
+            got = len(votes)
+
+            if expected == got:
+                if voting_progress is not None:
+                    voting_progress["valid"] += 1
+                    print(f"[VOTING PROGRESS: valid] {voting_progress['valid']} valid, {voting_progress['partial']} partial, total {voting_progress['valid']+voting_progress['partial']}/{voting_progress['total']} (batch {batch_num} via {current_model})")
+                return [(i, v) for (i, _, _), v in zip(strings_batch, votes)]
+            # --- FIX: force align translations ---
+            elif got < expected:
+                # Pad missing with ordinary
+                print(f"Expected {expected}, got {got} -> Padding raw votes")
+                votes.extend(raw_votes[got:])
+            else:
+                print(f"Expected {expected}, got {got} -> Truncating extra")
+                votes = votes[:expected]
+
+            if voting_progress is not None:
+                voting_progress["partial"] += 1
+                print(f"[VOTING PROGRESS: partial] {voting_progress['valid']} valid, {voting_progress['partial']} partial, total {voting_progress['valid']+voting_progress['partial']}/{voting_progress['total']} (batch {batch_num} via {current_model})")
+            return [(i, v) for (i, _, _), v in zip(strings_batch, votes)]
+
+
 # ===================== TRANSLATION FUNCTIONS =====================
 async def _translate_openai(strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, model, batch_num, type, provider):
-    # MAX_CHARS_PER_TRANSLATE = 30_000  # conservative
-    # total_chars = sum(len(s) for s in strings)
-    # if total_chars > MAX_CHARS_PER_TRANSLATE:
-    #     # split into two equal parts
-    #     if len(strings) > 1:
-    #         print(
-    #             f"{total_chars} total characters, Splitting {type} batch {batch_num} due to large size, using {provider}")
-    #         mid = len(strings) // 2
-    #         left = await _translate_openai(strings[:mid], examples, user_id, shopDomain, target_lang, brand_tone, industry, model, batch_num, type, provider)
-    #         right = await _translate_openai(strings[mid:], examples, user_id, shopDomain, target_lang, brand_tone, industry, model, batch_num, type, provider)
-    #         return left + right
-    #     else:
-    #         print(f"{total_chars} total characters, Splitting string of {type} batch {batch_num} due to large size, using {provider}")
-    #         splitted_strings = strings[0].split(".")
-    #         mid = len(splitted_strings) // 2
-    #         left = await _translate_openai(splitted_strings[:mid], examples, user_id, shopDomain, target_lang, brand_tone, industry, model, batch_num, type, provider)
-    #         right = await _translate_openai(splitted_strings[mid:], examples, user_id, shopDomain, target_lang, brand_tone, industry, model, batch_num, type, provider)
-    #         result = left + right
-    #         return ["".join(result)]
-    
     query = TranslationQuery(
         input=strings, 
         user_id=user_id,
@@ -560,67 +481,7 @@ async def _translate_openai(strings, examples, user_id, shopDomain, target_lang,
     )
 
     content = await fewshotTranslation(examples, model, query, SafeJsonParser)
-    # return [clean_line(x) for x in translations]
 
-    # prompt = f"""
-    #     You are a professional translator.
-
-    #     Task:
-    #     Translate the following {len(strings)} strings into {target_lang}.
-    #     - Maintain the brand tone as '{brand_tone}'.
-    #     - Adapt translations to the industrial domain '{industry}'.
-    #       Use terminology, phrasing, and style that are natural and widely used in this domain.
-    #     - If a string contains HTML tags (<p>, <div>, <br>, etc.), KEEP the tags unchanged, only translate the inner text.
-    #     - Preserve placeholders (e.g., {{name}}, %s, {{0}}) exactly as they are. Translate surrounding text but do NOT translate or modify the text inside placeholders.
-    #     - Do NOT merge, omit, or add strings.
-    #     - Do not summarize, simplify, or shorten long texts (e.g., Privacy Policies, Terms & Conditions). Translate them fully.
-    #     - Special rule for language codes:
-    #     If a string is a language code such as "en", replace it with the correct code for {target_lang}.
-    #     Example: "en" → "fr" when {target_lang} is French.
-
-    #     Output requirements:
-    #     - Return ONLY a valid JSON array.
-    #     - The array must contain exactly {len(strings)} items.
-    #     - Order of items must match the input order.
-    #     - Each output item must be a string.
-
-    #     Input strings:
-    #     {json.dumps(strings, ensure_ascii=False)}
-
-    #     Output format (strict):
-    #     [
-    #     "translation of string 1",
-    #     "translation of string 2",
-    #     ...
-    #     ]
-    # """
-
-    # resp = await model.chat.completions.create(
-    #     model="gpt-4.1-mini",  # gpt-4o-mini # gpt-4.1-mini
-    #     messages=[{"role": "user", "content": prompt}],
-    #     temperature=0.7,
-    #     response_format={
-    #         "type": "json_schema",
-    #         "json_schema": {
-    #             "name": "translation_response",
-    #             "schema": {
-    #                 "type": "object",
-    #                 "properties": {
-    #                     "translations": {
-    #                         "type": "array",
-    #                         "items": {"type": "string"},
-    #                         "description": "Translated strings in the same order as input."
-    #                     }
-    #                 },
-    #                 "required": ["translations"],
-    #                 "additionalProperties": False,
-    #             },
-    #         },
-    #     }
-    # )
-
-    # content = resp.choices[0].message.content
-    # content = content.strip()
     if isinstance(content, str):
         content = content.strip()
         content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
@@ -650,26 +511,6 @@ async def translate_openai_2(strings, examples, user_id, shopDomain, target_lang
 
 
 async def _translate_gemini(strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, model, batch_num, type, provider):
-    # MAX_CHARS_PER_TRANSLATE = 30_000  # conservative
-    # total_chars = sum(len(s) for s in strings)
-    # if total_chars > MAX_CHARS_PER_TRANSLATE:
-    #     # split into two equal parts
-    #     if len(strings) > 1:
-    #         print(
-    #             f"{total_chars} total characters, Splitting {type} batch {batch_num} due to large size, using {provider}")
-    #         mid = len(strings) // 2
-    #         left = await _translate_gemini(strings[:mid], examples, user_id, shopDomain, target_lang, brand_tone, industry, model, batch_num, type, provider)
-    #         right = await _translate_gemini(strings[mid:], examples, user_id, shopDomain, target_lang, brand_tone, industry, model, batch_num, type, provider)
-    #         return left + right
-    #     else:
-    #         print(f"{total_chars} total characters, Splitting string of {type} batch {batch_num} due to large size, using {provider}")
-    #         splitted_strings = strings[0].split(".")
-    #         mid = len(splitted_strings) // 2
-    #         left = await _translate_gemini(splitted_strings[:mid], examples, user_id, shopDomain, target_lang, brand_tone, industry, model, batch_num, type, provider)
-    #         right = await _translate_gemini(splitted_strings[mid:], examples, user_id, shopDomain, target_lang, brand_tone, industry, model, batch_num, type, provider)
-    #         result = left + right
-    #         return ["".join(result)]
-    
     query = TranslationQuery(
         input=strings, 
         user_id=user_id,
@@ -681,47 +522,7 @@ async def _translate_gemini(strings, examples, user_id, shopDomain, target_lang,
     )
 
     content = await fewshotTranslation(examples, model, query, SafeJsonParser)
-    # return [clean_line(x) for x in translations]
 
-    # prompt = f"""
-    #     You are a professional translator.
-
-    #     Task:
-    #     Translate the following {len(strings)} strings into {target_lang}.
-    #     - Maintain the brand tone as '{brand_tone}'.
-    #     - Adapt translations to the industrial domain '{industry}'.
-    #       Use terminology, phrasing, and style that are natural and widely used in this domain.
-    #     - If a string contains HTML tags (<p>, <div>, <br>, etc.), KEEP the tags unchanged, only translate the inner text.
-    #     - Preserve placeholders (e.g., {{name}}, %s, {{0}}) exactly as they are. Translate surrounding text but do NOT translate or modify the text inside placeholders.
-    #     - Do NOT merge, omit, or add strings.
-    #     - Translate long texts fully (no summarization).
-    #     - Language code rule: if a string is a language code (e.g., "en"), replace it with the correct code for {target_lang}.
-    #     Example: "en" → "fr" when {target_lang} is French.
-
-    #     Output requirements:
-    #     - Return ONLY valid JSON.
-    #     - JSON must be an array of exactly {len(strings)} strings.
-    #     - Order must match the input order.
-    #     - No comments, no explanations, no extra text.
-
-    #     Input strings:
-    #     {json.dumps(strings, ensure_ascii=False)}
-
-    #     Output format (strict):
-    #     [
-    #     "translation of string 1",
-    #     "translation of string 2",
-    #     ...
-    #     ]
-    # """
-    # # resp = await model.generate_content_async(prompt, generation_config={"response_mime_type": "application/json"})
-    # resp = await asyncio.to_thread(
-    #     model.generate_content,
-    #     prompt,
-    #     generation_config={"response_mime_type": "application/json"}
-    # )
-    # content = resp.text or "[]"
-    # content = content.strip()
     if isinstance(content, str):
         content = content.strip()
         content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
@@ -755,11 +556,7 @@ async def _translate_batch(indexed_strings, examples, user_id, shopDomain, targe
     global model_index_translation
     strings = [s for _, s in indexed_strings]
     # print(strings)
-    # print(strings)
     logs[f"{type}_{batch_num}"] = {}
-    # best_provider = None
-    # best_translation = None
-    # best_score = float("inf")
 
     # Define provider order
     translation_model_cycle = ["openai1", "openai2", "gemini1"] if type == "business" else [
@@ -1076,7 +873,7 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
             })
         return serialized
 
-    # ---- TRANSLATE ----
+    # ---- CLASSIFY ----
     batches = [strings_to_classify[i:i+CLASSIFICATION_BATCH_SIZE]
                for i in range(0, len(strings_to_classify), CLASSIFICATION_BATCH_SIZE)]
     total_batches = len(batches)
@@ -1109,22 +906,77 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
                                   for item in sublist]
 
     # ---------- RECOMBINE ----------
-    final_results = [l for _, l in sorted(
+    final_results = [label for _, label in sorted(
         final_classification_pairs, key=lambda x: x[0])]
 
-    classified = [(i, s, l)
-                  for i, (s, l) in enumerate(zip(unique_texts, final_results))]
+    classified = [(index, string, label)
+                  for index, (string, label) in enumerate(zip(unique_texts, final_results))]
+    
+    end = datetime.now()
+    print(f"Total time consumed for classification: {end-start}")
 
-    # STEP 2: Split into two groups, preserving index
     business_items = [(i, s) for i, s, l in classified if (
         l.strip().lower()) == "business"]
     ordinary_items = [(i, s) for i, s, l in classified if (
         l.strip().lower()) == "ordinary"]
 
-    end = datetime.now()
-    print(f"Total time consumed for classification: {end-start}")
     print(
         f"[CLASSIFY] Business: {len(business_items)}, Ordinary: {len(ordinary_items)}")
+    
+    # ---- VOTE ----
+    voting_batches = [classified[i:i+VOTING_BATCH_SIZE]
+               for i in range(0, len(classified), VOTING_BATCH_SIZE)]
+    total_batches = len(voting_batches)
+
+    start = datetime.now()
+
+    voting_progress = {"valid": 0,
+                       "partial": 0,
+                       "total": total_batches
+                       }
+
+    # Run classifications in parallel
+    voting_tasks = []
+
+    for idx, batch in enumerate(voting_batches):
+        voting_tasks.append(_voting_batch(
+            batch, idx+1, total_batches, voting_progress=voting_progress))
+
+    # all_classification_results = await asyncio.gather(*classification_tasks)
+
+    results = []
+    for coro in asyncio.as_completed(voting_tasks):
+        res = await coro
+        results.append(res)
+    all_voting_results = results
+
+    # Flatten list of lists into a single list
+    final_voting_pairs = [item
+                          for sublist in all_voting_results
+                          for item in sublist]
+    opposites = {"business": "ordinary", "ordinary": "business"}
+
+    final_results = [vote for _, vote in sorted(
+        final_voting_pairs, key=lambda x: x[0])]
+    
+    verified = []
+    for (i, s, l), v in zip(classified, final_results):
+        if v is False:
+            l = opposites.get(l, l)
+        verified.append((i, s, l))
+
+    end = datetime.now()
+    print(f"Total time consumed for voting: {end-start}")
+    
+
+    # STEP 2: Split into two groups, preserving index
+    business_items = [(i, s) for i, s, l in verified if (
+        l.strip().lower()) == "business"]
+    ordinary_items = [(i, s) for i, s, l in verified if (
+        l.strip().lower()) == "ordinary"]
+
+    print(
+        f"[CLASSIFY AFTER VOTING] Business: {len(business_items)}, Ordinary: {len(ordinary_items)}")
 
     # Split into translation batches
     business_batches = [business_items[i:i+TRANSLATION_BATCH_SIZE]

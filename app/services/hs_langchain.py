@@ -7,7 +7,7 @@ import json
 import re
 
 
-async def promptClassification(llm, strings_batch):
+async def promptClassification(classification_model, strings_batch):
     prompt_template = PromptTemplate.from_template("""
     You are a strict text classifier.
 
@@ -36,7 +36,7 @@ async def promptClassification(llm, strings_batch):
     """
     )
 
-    chain = prompt_template | llm | JsonOutputParser()
+    chain = prompt_template | classification_model | JsonOutputParser()
     response = await chain.ainvoke({
         "strings_batch": json.dumps(strings_batch, ensure_ascii=False),
         "num_strings": len(strings_batch)
@@ -45,8 +45,78 @@ async def promptClassification(llm, strings_batch):
     return [x.strip().lower() for x in response]
 
 
+async def voteClassification(model, strings_batch):
+    prompt_template = PromptTemplate.from_template("""
+You are a *strict JSON verifier* for text category assignments.
 
-async def fewshotTranslation(examples, llm, query, SafeJsonParser):
+### Categories
+- **business** → official, legal, financial, invoice, compliance, government, or formal system text.
+- **ordinary** → marketing, social, everyday, blog, UI, or casual communication.
+
+### Task
+Each input pair is formatted as `[text, assigned_label]`.
+Decide if the label is logically correct **based only** on the category rules above.
+
+### Output Requirements
+- Return a **JSON array of booleans** (`true` or `false`).
+- The **array length MUST equal {num_pairs}** (one per input).
+- Maintain **exact same order** as input.
+- **No extra text, comments, or formatting** outside the array.
+- **No skipped or merged items.**
+
+If any pair is ambiguous, return `false` (do not guess).
+
+### Examples
+Input:
+[
+["Invoice #1234", "business"],
+["Check our new sale!", "business"],
+["Terms & Conditions", "ordinary"],
+["Refunds processed within 7 days", "business"]
+]
+
+Output:
+[true, false, false, true]
+
+---
+
+Now verify exactly {num_pairs} pairs below and return a JSON array of {num_pairs} booleans.
+Pairs:
+{pairs}
+
+Respond with **only** the JSON array, nothing else.
+""")
+
+
+    chain = prompt_template | model | JsonOutputParser()
+    response = await chain.ainvoke({
+        "pairs": json.dumps(strings_batch, ensure_ascii=False),
+        "num_pairs": len(strings_batch)
+    })
+
+    try:
+        votes = json.loads(response)
+    except Exception:
+        votes = response
+    
+    print(votes)
+    
+    clean_votes = []
+    for v in votes:
+        if isinstance(v, bool):
+            clean_votes.append(v)
+        elif isinstance(v, str):
+            clean_votes.append(v.strip().lower() == "true")
+        else:
+            # Unexpected type → default to False
+            clean_votes.append(False)
+
+    return clean_votes
+
+    # return [x.strip().lower() for x in response]
+
+
+async def fewshotTranslation(examples, model, query, SafeJsonParser):
     example_template = """
     Original: {original}
     Translated: {translated}
@@ -105,7 +175,7 @@ async def fewshotTranslation(examples, llm, query, SafeJsonParser):
     # print("Expected variables:", fewshot_prompt.input_variables)
 
 
-    chain = fewshot_prompt | llm | SafeJsonParser()
+    chain = fewshot_prompt | model | SafeJsonParser()
 
     # print("Chain is created!")
     input_text = query.input
