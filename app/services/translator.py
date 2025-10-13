@@ -1161,6 +1161,11 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
         flag_key = f"aiTranslated_{last_key}"
         ref[flag_key] = (translated.strip() != original_value.strip())
 
+        # Mark priority review if untranslatable
+        priority_key = f"priorityReview_{last_key}"
+        ref[priority_key] = (translated.strip() == original_value.strip())
+        
+
     injected_log = []
     counter = 0
     # for i, translated in enumerate(final_results):
