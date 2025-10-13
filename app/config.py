@@ -18,6 +18,8 @@ class Settings:
     MONGO_DB: str = os.getenv("MONGO_DB", "")
     CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "")
     CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "")
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "")
+    REDIS_PORT: int = int(os.getenv("REDIS_PORT", 6379))
     SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
 
 

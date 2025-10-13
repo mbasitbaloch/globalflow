@@ -22,6 +22,9 @@ from collections import defaultdict
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 
+BATCHES_DIR = os.path.join(LOG_DIR, "batches")
+os.makedirs(BATCHES_DIR, exist_ok=True)
+
 REPORT_DIR = os.path.join(LOG_DIR, "report")
 os.makedirs(REPORT_DIR, exist_ok=True)
 
@@ -122,9 +125,7 @@ model_index_translation = 0
 
 sys.setrecursionlimit(3000)
 
-# ==== LOG DIR ====
-LOG_DIR = "logs"
-os.makedirs(LOG_DIR, exist_ok=True)
+
 
 
 # ===================== HELPERS =====================
@@ -214,8 +215,9 @@ async def with_retry(fn, *args, retries=3, **kwargs):
                 await asyncio.sleep(wait)
             else:
                 print(
-                    f"⚠ Error in, batch {type} {batch_num}, {provider}: {e}, retrying...")
+                    f"⚠ Error in, batch {type} {batch_num}, {provider}: {e}")
                 await asyncio.sleep(2)
+                break
     raise Exception(f"Max retries reached for {type} {batch_num} by {provider}")
 
 def qdrant_examples(shopDomain, targetLanguage, user_id):
@@ -284,16 +286,16 @@ def qdrant_examples(shopDomain, targetLanguage, user_id):
 
         examples = [
             {
-                "original": [ex.get("original", "") for ex in fewshot_data[:50]],
-                "translated": [ex.get("translated", "") for ex in fewshot_data[:50]]
+                "original": json.dumps([ex.get("original", "") for ex in fewshot_data[:50]], ensure_ascii=False),
+                "translated": json.dumps([ex.get("translated", "") for ex in fewshot_data[:50]], ensure_ascii=False)
             },
             {
-                "original": [ex.get("original", "") for ex in fewshot_data[50:100]],
-                "translated": [ex.get("translated", "") for ex in fewshot_data[50:100]]
+                "original": json.dumps([ex.get("original", "") for ex in fewshot_data[50:100]], ensure_ascii=False),
+                "translated": json.dumps([ex.get("translated", "") for ex in fewshot_data[50:100]], ensure_ascii=False)
             },
             {
-                "original": [ex.get("original", "") for ex in fewshot_data[100:150]],
-                "translated": [ex.get("translated", "") for ex in fewshot_data[100:150]]
+                "original": json.dumps([ex.get("original", "") for ex in fewshot_data[100:150]], ensure_ascii=False),
+                "translated": json.dumps([ex.get("translated", "") for ex in fewshot_data[100:150]], ensure_ascii=False)
             },
         ]
     
@@ -308,7 +310,26 @@ async def _classify_openai(strings_batch, classification_model):
     """
     
     labels = await promptClassification(classification_model, strings_batch)
-    return [clean_line(label) for label in labels]
+    # return [clean_line(label) for label in labels]
+
+    if isinstance(labels, str):
+        labels = labels.strip()
+        labels = re.sub(r"^```[a-zA-Z]*\n?", "", labels)
+        labels = re.sub(r"```$", "", labels)
+        labels = labels.strip()
+    try:
+        data = json.loads(labels) if isinstance(labels, str) else labels
+        if isinstance(data, dict) and "labels" in data:
+            return [clean_line(x) for x in data["labels"]]
+        elif isinstance(data, list):
+            return [clean_line(x) for x in data]
+        else:
+            raise ValueError("Unexpected Openai response")
+    except Exception as e:
+        print(f"⚠ Parse fallback: {e}")
+        labels_str = str(labels)
+        lines = [line for line in labels_str.splitlines() if line.strip()]
+        return [clean_line(line) for line in lines]
 
 
 async def classify_openai_1(strings_batch, *args, **kwargs):
@@ -325,7 +346,26 @@ async def _classify_gemini(strings_batch, classification_model):
     """
     
     labels = await promptClassification(classification_model, strings_batch)
-    return [clean_line(label) for label in labels]
+    # return [clean_line(label) for label in labels]
+
+    if isinstance(labels, str):
+        labels = labels.strip()
+        labels = re.sub(r"^```[a-zA-Z]*\n?", "", labels)
+        labels = re.sub(r"```$", "", labels)
+        labels = labels.strip()
+    try:
+        data = json.loads(labels) if isinstance(labels, str) else labels
+        if isinstance(data, dict) and "labels" in data:
+            return [clean_line(x) for x in data["labels"]]
+        elif isinstance(data, list):
+            return [clean_line(x) for x in data]
+        else:
+            raise ValueError("Unexpected Gemini response")
+    except Exception as e:
+        print(f"⚠ Parse fallback: {e}")
+        labels_str = str(labels)
+        lines = [line for line in labels_str.splitlines() if line.strip()]
+        return [clean_line(line) for line in lines]
 
 
 async def classify_gemini_1(strings_batch, *args, **kwargs):
@@ -400,6 +440,25 @@ async def _vote_openai(strings_batch, voting_model):
     # return [clean_line(vote) for vote in votes]
     return votes
 
+    # if isinstance(votes, str):
+    #     votes = votes.strip()
+    #     votes = re.sub(r"^```[a-zA-Z]*\n?", "", votes)
+    #     votes = re.sub(r"```$", "", votes)
+    #     votes = votes.strip()
+    # try:
+    #     data = json.loads(votes) if isinstance(votes, str) else votes
+    #     if isinstance(data, dict) and "votes" in data:
+    #         return [clean_line(x) for x in data["votes"]]
+    #     elif isinstance(data, list):
+    #         return [clean_line(x) for x in data]
+    #     else:
+    #         raise ValueError("Unexpected Openai response")
+    # except Exception as e:
+    #     print(f"⚠ Parse fallback: {e}")
+    #     votes_str = str(votes)
+    #     lines = [line for line in votes_str.splitlines() if line.strip()]
+    #     return [clean_line(line) for line in lines]
+
 
 async def vote_openai_1(strings_batch, *args, **kwargs):
     return await _vote_openai(strings_batch, langchain_openai_1)
@@ -429,7 +488,7 @@ async def _voting_batch(strings_batch, batch_num, total_batches, voting_progress
             if current_model == "openai1":
                 result = await with_retry(vote_openai_1, strings, batch_num, total_batches, provider=current_model)
             else:  # openai2
-                result = await with_retry(vote_openai_1, strings, batch_num, total_batches, provider=current_model)
+                result = await with_retry(vote_openai_2, strings, batch_num, total_batches, provider=current_model)
 
             votes = []
             for v in result:
@@ -587,7 +646,7 @@ async def _translate_batch(indexed_strings, examples, user_id, shopDomain, targe
             models_used.append(current_model)
 
         except Exception as e:
-            logs[f"{type}_{batch_num}"]["exc1"] = f"⚠ {current_model} failed, falling back: {e}"
+            logs[f"{type}_{batch_num}"]["exc1"] = f"⚠ {current_model} failed for {type} batch {batch_num}, falling back: {e}"
             print(logs[f"{type}_{batch_num}"]["exc1"])
             for alt in translation_model_cycle:
                 current_model = alt
@@ -611,10 +670,10 @@ async def _translate_batch(indexed_strings, examples, user_id, shopDomain, targe
                         {"tokens": tokens_used, "time": elapsed})
                     break
                 except Exception as e2:
-                    logs[f"{type}_{batch_num}"]["exc2"] = f"⚠ Fallback {current_model} also failed: {e2}"
+                    logs[f"{type}_{batch_num}"]["exc2"] = f"⚠ Fallback {current_model} also failed for {type} batch {batch_num}: {e2}"
                     print(logs[f"{type}_{batch_num}"]["exc2"])
             else:
-                raise Exception("All providers failed!")
+                raise Exception("All providers failed for {type} batch {batch_num}")
 
         if translations:
             expected = len(strings)
@@ -754,13 +813,13 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
         """
         Split text into chunks of <= max_len, trying to split at '.' boundaries.
         """
-        sentences = re.split( r'(?<=[.?!])\s+', text)
-        # sentences = re.split(
-        #     r'(?<=[.?!])(?=\s|<)|</p>(?=\s|<)|</li>(?=\s|<)|</h[1-6]>(?=\s|<)|</div>(?=\s|<)|'
-        #     r'<br\s*/?>(?=\s|<)|</tr>(?=\s|<)|</td>(?=\s|<)|</ul>(?=\s|<)|</table>(?=\s|<)|\n{2,}',
-        #     text,
-        #     flags=re.IGNORECASE
-        # )
+        # sentences = re.split( r'(?<=[.?!])\s+', text)
+        sentences = re.split(
+            r'(?<=[.?!])(?=\s|<)|</p>(?=\s|<)|</li>(?=\s|<)|</h[1-6]>(?=\s|<)|</div>(?=\s|<)|'
+            r'<br\s*/?>(?=\s|<)|</tr>(?=\s|<)|</td>(?=\s|<)|</ul>(?=\s|<)|</table>(?=\s|<)|\n{2,}',
+            text,
+            flags=re.IGNORECASE
+        )
         chunks, current = [], ""
 
         for sentence in sentences:
@@ -996,7 +1055,7 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
     }
 
     batches_file = os.path.join(
-        LOG_DIR, f"batches_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        BATCHES_DIR, f"batches_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
     with open(batches_file, "w", encoding="utf-8") as f:
         json.dump(batches_data, f, ensure_ascii=False, indent=2)
 
