@@ -113,7 +113,7 @@ def get_full_translation_from_cache(shop_domain: str, target_lang: str, brand_to
     return None
 
 
-def set_full_translation_in_cache(shop_domain: str, target_lang: str, brand_tone: str, translated_data: dict, raw_hash: str, ttl: int = 3600):  # 1h TTL
+def set_full_translation_in_cache(shop_domain: str, target_lang: str, brand_tone: str, translated_data: dict, raw_hash: str, ttl: int = 2592000):  # 1h TTL
     """
     Store full translated JSON + raw_hash with TTL.
     """
@@ -157,7 +157,7 @@ def set_cached_classification(target_lang, brand_tone, text, label):
     key = _make_cache_key_flex(
         target_lang, brand_tone, text, include_domain=False)
     redis_client.setex(f"classify:{key}", 60 * # type: ignore
-                       60*24*7, json.dumps(label))  # 7d TTL
+                       60*24*30, json.dumps(label))  # 7d TTL
 
 # Similar for vote: key on f"{text}:{initial_label}"
 
@@ -173,7 +173,7 @@ def get_cached_vote(target_lang, brand_tone, cache_key):
 def set_cached_vote(target_lang, brand_tone, cache_key, vote):
     flex_key = _make_cache_key_flex(
         target_lang, brand_tone, cache_key, include_domain=False)
-    redis_client.setex(f"vote:{flex_key}", 60*60*24*7, json.dumps(vote)) # type: ignore
+    redis_client.setex(f"vote:{flex_key}", 60*60*24*30, json.dumps(vote)) # type: ignore
 
 
 def get_cached_full_process(target_lang, brand_tone, text):
