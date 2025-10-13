@@ -34,7 +34,8 @@ def user_helper(user) -> dict:
         "shopifyStores" : user.get("shopifyStores", []),
         "createdAt" : user.get("createdAt"),
         "updatedAt" : user.get("updatedAt"),
-        "__v" : user.get("__v")
+        "__v" : user.get("__v"),
+        "country" : user.get("country", None)
     }
 
 @router.get("/get_all", response_model=List[User], status_code=status.HTTP_200_OK)
@@ -44,8 +45,8 @@ async def get_all():
     return [user_helper(user) for user in users]
 
 @router.get("/{id}", response_model=User, status_code=status.HTTP_200_OK)
-async def get_user(user_id):
-    user = users_collection.find_one({"_id":ObjectId(user_id)})
+async def get_user(id):
+    user = users_collection.find_one({"_id":ObjectId(id)})
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found!")
     return user_helper(user)

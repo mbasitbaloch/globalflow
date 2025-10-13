@@ -10,19 +10,19 @@ import google.generativeai as genai  # Gemini SDK
 
 # ==== CLIENTS ====
 openai_client = AsyncOpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
+    api_key=os.getenv("OPENAI_API_KEY_1"),
     timeout=120.0
 )
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY_1"))  # type: ignore
-gemini_model_1 = genai.GenerativeModel("gemini-1.5-flash")  # type: ignore
+genai.configure(api_key=os.getenv("GEMINI_API_KEY_1"))
+gemini_model_1 = genai.GenerativeModel("gemini-2.5-flash-lite")
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY_2"))  # type: ignore
-gemini_model_2 = genai.GenerativeModel("gemini-1.5-flash")  # type: ignore
+# genai.configure(api_key=os.getenv("GEMINI_API_KEY_2"))
+# gemini_model_2 = genai.GenerativeModel("gemini-2.5-flash-lite")
 
 # ==== CONFIG ====
 BATCH_SIZE = 50
-MAX_CONCURRENCY = 3
+MAX_CONCURRENCY = 6
 semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
 model_cycle = ["gemini1", "gemini2", "openai"]
@@ -115,7 +115,9 @@ Return ONLY a valid JSON array of translated strings, same order, nothing else.
 Strings:
 {json.dumps(strings, ensure_ascii=False)}
 """
-    resp = model.generate_content(prompt)
+    # resp = model.generate_content(prompt)
+    resp = await model.generate_content_async(prompt)
+
     text = resp.text or "[]"
     try:
         return [clean_line(x) for x in json.loads(text)]
@@ -127,12 +129,34 @@ async def translate_gemini_1(strings, target_lang, brand_tone):
     return await _translate_with_gemini(strings, target_lang, brand_tone, gemini_model_1)
 
 
-async def translate_gemini_2(strings, target_lang, brand_tone):
-    return await _translate_with_gemini(strings, target_lang, brand_tone, gemini_model_2)
+# async def translate_gemini_2(strings, target_lang, brand_tone):
+#     return await _translate_with_gemini(strings, target_lang, brand_tone, gemini_model_2)
+
+
+# ===================== BATCH REPORTING =====================
+def save_batch_report(batch_num, model_name, sent, returned, unchanged_strings, run_dir):
+    report = {
+        "batch_num": batch_num,
+        "model": model_name,
+        "sent_count": len(sent),
+        "returned_count": len(returned),
+        "unchanged_count": len(unchanged_strings),
+        "unchanged_strings": unchanged_strings
+    }
+
+    reports_dir = os.path.join(run_dir, "reports")
+    os.makedirs(reports_dir, exist_ok=True)
+
+    file_path = os.path.join(reports_dir, f"batch_{batch_num}.json")
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+
+    print(
+        f"[REPORT] Saved batch_{batch_num}.json → unchanged={len(unchanged_strings)}")
 
 
 # ===================== BATCH HANDLER =====================
-async def _translate_batch(strings, target_lang, brand_tone, batch_num, total_batches):
+async def _translate_batch(strings, target_lang, brand_tone, batch_num, total_batches, run_dir):
     global model_index
     async with semaphore:
         print(
@@ -143,10 +167,10 @@ async def _translate_batch(strings, target_lang, brand_tone, batch_num, total_ba
         try:
             if current_model == "openai":
                 result = await with_retry(translate_openai, strings, target_lang, brand_tone)
-            elif current_model == "gemini1":
-                result = await with_retry(translate_gemini_1, strings, target_lang, brand_tone)
             else:
-                result = await with_retry(translate_gemini_2, strings, target_lang, brand_tone)
+                result = await with_retry(translate_gemini_1, strings, target_lang, brand_tone)
+            # else:
+            #     result = await with_retry(translate_gemini_2, strings, target_lang, brand_tone)
         except Exception as e:
             print(f"⚠ {current_model} failed, falling back: {e}")
             for alt in model_cycle:
@@ -155,17 +179,27 @@ async def _translate_batch(strings, target_lang, brand_tone, batch_num, total_ba
                 try:
                     if alt == "openai":
                         result = await translate_openai(strings, target_lang, brand_tone)
-                    elif alt == "gemini1":
-                        result = await translate_gemini_1(strings, target_lang, brand_tone)
                     else:
-                        result = await translate_gemini_2(strings, target_lang, brand_tone)
+                        result = await translate_gemini_1(strings, target_lang, brand_tone)
+                    # else:
+                    #     result = await translate_gemini_2(strings, target_lang, brand_tone)
                     break
                 except Exception as e2:
                     print(f"⚠ Fallback {alt} also failed: {e2}")
             else:
                 raise Exception("All providers failed!")
 
-        print(
+        returned_count = len(result)
+        unchanged_strings = [s for s, t in zip(strings, result) if s == t]
+
+        # Console summary
+        print(f"[BATCH {batch_num}] sent={len(strings)}, returned={returned_count}, unchanged={len(unchanged_strings)} via {current_model}")
+
+        # Save JSON report
+        save_batch_report(batch_num, current_model, strings,
+                          result, unchanged_strings, run_dir)
+
+        (
             f"[✔] Completed batch {batch_num}/{total_batches} via {current_model}")
         return result
 
@@ -256,6 +290,11 @@ async def fast_translate_json(data, target_lang, brand_tone):
     strings_to_translate = [s for _, s, _ in positions]
     print(f"Total strings: {len(strings_to_translate)}")
 
+    # ---- RUN DIR ----
+    run_dir = os.path.join(
+        LOG_DIR, f"partial_batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    os.makedirs(run_dir, exist_ok=True)
+
     # ---- SAVE EXTRACTED ----
     extracted_log = [{"path": p, "string": s} for _, s, p in positions]
     extracted_file = os.path.join(
@@ -269,9 +308,17 @@ async def fast_translate_json(data, target_lang, brand_tone):
                for i in range(0, len(strings_to_translate), BATCH_SIZE)]
     total_batches = len(batches)
 
-    tasks = [_translate_batch(batch, target_lang, brand_tone, idx+1, total_batches)
+    tasks = [_translate_batch(batch, target_lang, brand_tone, idx+1, total_batches, run_dir)
              for idx, batch in enumerate(batches)]
     batch_results = await asyncio.gather(*tasks)
+
+    # Replaces the above gather to process as completed to avoid waiting for all to finish
+    # results = []
+    # for coro in asyncio.as_completed(tasks):
+    #     res = await coro
+    #     results.append(res)
+
+    # batch_results = results
 
     # ---------- INJECTION ----------
     # def set_value(d, path, value):
@@ -318,7 +365,7 @@ async def fast_translate_json(data, target_lang, brand_tone):
                 "original": orig_val,
                 "translated": translated
             })
-            print(f"[INJECT] {path_str} -> {translated[:60]}")
+            # print(f"[INJECT] {path_str} -> {translated[:60]}")
             string_index += 1
 
     # ---- SAVE INJECTED ----
