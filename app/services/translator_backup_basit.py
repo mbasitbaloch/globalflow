@@ -21,7 +21,7 @@ CONSOLE_DIR = os.path.join(LOG_DIR, "console")
 os.makedirs(CONSOLE_DIR, exist_ok=True)
 console_file = os.path.join(CONSOLE_DIR, "console.json")
 
-raw_logs = [{"message" : "Logs"}]
+raw_logs = [{"message": "Logs"}]
 with open(console_file, "w", encoding="utf-8") as f:
     json.dump(raw_logs[0], f, ensure_ascii=False, indent=4)
 
@@ -62,7 +62,8 @@ openai_model_2 = AsyncOpenAI(
 )
 
 genai.configure(api_key=settings.GEMINI_API_KEY_1)  # type: ignore
-gemini_model_1 = genai.GenerativeModel("gemini-2.0-flash-lite")  # type: ignore # gemini-1.5-flash
+gemini_model_1 = genai.GenerativeModel(
+    "gemini-2.0-flash-lite")  # type: ignore # gemini-1.5-flash
 
 # genai.configure(api_key=settings.GEMINI_API_KEY_2)  # type: ignore
 # gemini_model_2 = genai.GenerativeModel("gemini-1.5-flash")  # type: ignore
@@ -170,12 +171,13 @@ async def with_retry(fn, *args, retries=3, **kwargs):
                     {"time": datetime.now().isoformat(), "wait": wait})
                 await asyncio.sleep(wait)
             else:
-                print(f"⚠ Error in, batch {type} {batch_num}, {provider}: {e}, retrying...")
+                print(
+                    f"⚠ Error in, batch {type} {batch_num}, {provider}: {e}, retrying...")
                 await asyncio.sleep(2)
     raise Exception(f"Max retries reached for {kwargs.get('provider')}")
 
 
-# ===================== CLASSIFICATION FUNCTIONS =====================
+# # ===================== CLASSIFICATION FUNCTIONS =====================
 
 async def _classify_openai(strings_batch, batch_num, total_batches, classification_model, provider, type):
     """
@@ -220,7 +222,7 @@ async def _classify_openai(strings_batch, batch_num, total_batches, classificati
     """
 
     resp = await classification_model.chat.completions.create(
-        model="gpt-4.1-mini", # gpt-4o-mini # gpt-4.1-mini
+        model="gpt-4.1-mini",  # gpt-4o-mini # gpt-4.1-mini
         messages=[{"role": "user", "content": prompt}],  # type: ignore
         temperature=0.7,
         response_format={
@@ -265,12 +267,15 @@ async def _classify_openai(strings_batch, batch_num, total_batches, classificati
         return [line.strip().lower() for line in labels_text.split("\n") if line.strip()]
         # labels = [l if l in VALID_LABELS else "ordinary" for l in labels]
         # return labels
-    
+
+
 async def classify_openai_1(strings_batch, batch_num, total_batches, provider, type):
     return await _classify_openai(strings_batch, batch_num, total_batches, openai_model_1, provider, type)
 
+
 async def classify_openai_2(strings_batch, batch_num, total_batches, provider, type):
     return await _classify_openai(strings_batch, batch_num, total_batches, openai_model_2, provider, type)
+
 
 async def _classify_gemini(strings_batch, batch_num, total_batches, classification_model, provider, type):
     """
@@ -341,10 +346,12 @@ async def _classify_gemini(strings_batch, batch_num, total_batches, classificati
         # labels = [l if l in VALID_LABELS else "ordinary" for l in labels]
         # return labels
 
+
 async def classify_gemini_1(strings_batch, batch_num, total_batches, provider, type):
     return await _classify_gemini(strings_batch, batch_num, total_batches, gemini_model_1, provider, type)
 
-# ===================== BATCH CLASSIFICATION =====================
+# # ===================== BATCH CLASSIFICATION =====================
+
 
 async def _classify_batch(indexed_strings, batch_num, total_batches, classification_progress=None):
     global model_index_classify
@@ -353,18 +360,20 @@ async def _classify_batch(indexed_strings, batch_num, total_batches, classificat
     VALID_LABELS = {"ordinary", "business"}
     raw_ordinary = ["ordinary" for i in range(50)]
     async with semaphore_classification:
-        current_model = classification_model_cycle[model_index_classify % len(classification_model_cycle)]
+        current_model = classification_model_cycle[model_index_classify % len(
+            classification_model_cycle)]
         model_index_classify += 1
-        print(f"\n[DEBUG] Batch {batch_num}/{total_batches} via {current_model} → {len(strings)} strings ")
+        print(
+            f"\n[DEBUG] Batch {batch_num}/{total_batches} via {current_model} → {len(strings)} strings ")
 
         try:
             if current_model == "openai1":
                 result = await with_retry(classify_openai_1, strings, batch_num, total_batches, provider=current_model, type=type)
             elif current_model == "openai2":
                 result = await with_retry(classify_openai_2, strings, batch_num, total_batches, provider=current_model, type=type)
-            else: # gemini1
+            else:  # gemini1
                 result = await with_retry(classify_gemini_1, strings, batch_num, total_batches, provider=current_model, type=type)
-            
+
             labels = []
             for l in result:
                 if l in VALID_LABELS:
@@ -398,7 +407,7 @@ async def _classify_batch(indexed_strings, batch_num, total_batches, classificat
                 classification_progress["partial"] += 1
                 print(f"[CLASSIFICATION PROGRESS: partial] {classification_progress['valid']} valid, {classification_progress['partial']} partial, total {classification_progress['valid']+classification_progress['partial']}/{classification_progress['total']} (batch {batch_num} via {current_model})")
             return [(i, l) for (i, _), l in zip(indexed_strings, labels)]
-        
+
 
 # ===================== TRANSLATION FUNCTIONS =====================
 
@@ -408,7 +417,8 @@ async def _translate_openai(strings, target_lang, brand_tone, model, batch_num, 
     if total_chars > MAX_CHARS_PER_TRANSLATE:
         # split into two equal parts
         if len(strings) > 1:
-            print(f"{total_chars} total characters, Splitting {type} batch {batch_num} due to large size, using {provider}")
+            print(
+                f"{total_chars} total characters, Splitting {type} batch {batch_num} due to large size, using {provider}")
             mid = len(strings) // 2
             left = await _translate_openai(strings[:mid], target_lang, brand_tone, model, batch_num, type, provider)
             right = await _translate_openai(strings[mid:], target_lang, brand_tone, model, batch_num, type, provider)
@@ -421,40 +431,40 @@ async def _translate_openai(strings, target_lang, brand_tone, model, batch_num, 
             right = await _translate_openai(splitted_strings[mid:], target_lang, brand_tone, model, batch_num, type, provider)
             result = left + right
             return ["".join(result)]
-    
+
     prompt = f"""
-    You are a professional translator.
+        You are a professional translator.
 
-    Task:
-    Translate the following {len(strings)} strings into {target_lang}.
-    - Maintain the brand tone as '{brand_tone}'.
-    - If a string contains HTML tags (<p>, <div>, <br>, etc.), KEEP the tags unchanged, only translate the inner text.
-    - Preserve placeholders (e.g., {{name}}, %s, {{0}}) exactly as they are. Translate surrounding text but do NOT translate or modify the text inside placeholders.
-    - Do NOT merge, omit, or add strings.
-    - Do not summarize, simplify, or shorten long texts (e.g., Privacy Policies, Terms & Conditions). Translate them fully.
-    - Special rule for language codes:
-    If a string is a language code such as "en", replace it with the correct code for {target_lang}.
-    Example: "en" → "fr" when {target_lang} is French.
+        Task:
+        Translate the following {len(strings)} strings into {target_lang}.
+        - Maintain the brand tone as '{brand_tone}'.
+        - If a string contains HTML tags (<p>, <div>, <br>, etc.), KEEP the tags unchanged, only translate the inner text.
+        - Preserve placeholders (e.g., {{name}}, %s, {{0}}) exactly as they are. Translate surrounding text but do NOT translate or modify the text inside placeholders.
+        - Do NOT merge, omit, or add strings.
+        - Do not summarize, simplify, or shorten long texts (e.g., Privacy Policies, Terms & Conditions). Translate them fully.
+        - Special rule for language codes:
+        If a string is a language code such as "en", replace it with the correct code for {target_lang}.
+        Example: "en" → "fr" when {target_lang} is French.
 
-    Output requirements:
-    - Return ONLY a valid JSON array.
-    - The array must contain exactly {len(strings)} items.
-    - Order of items must match the input order.
-    - Each output item must be a string.
+        Output requirements:
+        - Return ONLY a valid JSON array.
+        - The array must contain exactly {len(strings)} items.
+        - Order of items must match the input order.
+        - Each output item must be a string.
 
-    Input strings:
-    {json.dumps(strings, ensure_ascii=False)}
+        Input strings:
+        {json.dumps(strings, ensure_ascii=False)}
 
-    Output format (strict):
-    [
-    "translation of string 1",
-    "translation of string 2",
-    ...
-    ]
-"""
+        Output format (strict):
+        [
+        "translation of string 1",
+        "translation of string 2",
+        ...
+        ]
+    """
 
     resp = await model.chat.completions.create(
-        model="gpt-4.1-mini", # gpt-4o-mini # gpt-4.1-mini
+        model="gpt-4.1-mini",  # gpt-4o-mini # gpt-4.1-mini
         messages=[{"role": "user", "content": prompt}],  # type: ignore
         temperature=0.7,
         response_format={
@@ -510,7 +520,8 @@ async def _translate_gemini(strings, target_lang, brand_tone, model, batch_num, 
     if total_chars > MAX_CHARS_PER_TRANSLATE:
         # split into two equal parts
         if len(strings) > 1:
-            print(f"{total_chars} total characters, Splitting {type} batch {batch_num} due to large size, using {provider}")
+            print(
+                f"{total_chars} total characters, Splitting {type} batch {batch_num} due to large size, using {provider}")
             mid = len(strings) // 2
             left = await _translate_gemini(strings[:mid], target_lang, brand_tone, model, batch_num, type, provider)
             right = await _translate_gemini(strings[mid:], target_lang, brand_tone, model, batch_num, type, provider)
@@ -523,35 +534,35 @@ async def _translate_gemini(strings, target_lang, brand_tone, model, batch_num, 
             right = await _translate_gemini(splitted_strings[mid:], target_lang, brand_tone, model, batch_num, type, provider)
             result = left + right
             return ["".join(result)]
-    
+
     prompt = f"""
-    You are a professional translator.
+        You are a professional translator.
 
-    Task:
-    Translate the following {len(strings)} strings into {target_lang}.
-    - Maintain the brand tone as '{brand_tone}'.
-    - If a string contains HTML tags (<p>, <div>, <br>, etc.), KEEP the tags unchanged, only translate the inner text.
-    - Preserve placeholders (e.g., {{name}}, %s, {{0}}) exactly as they are. Translate surrounding text but do NOT translate or modify the text inside placeholders.
-    - Do NOT merge, omit, or add strings.
-    - Translate long texts fully (no summarization).
-    - Language code rule: if a string is a language code (e.g., "en"), replace it with the correct code for {target_lang}.
-    Example: "en" → "fr" when {target_lang} is French.
+        Task:
+        Translate the following {len(strings)} strings into {target_lang}.
+        - Maintain the brand tone as '{brand_tone}'.
+        - If a string contains HTML tags (<p>, <div>, <br>, etc.), KEEP the tags unchanged, only translate the inner text.
+        - Preserve placeholders (e.g., {{name}}, %s, {{0}}) exactly as they are. Translate surrounding text but do NOT translate or modify the text inside placeholders.
+        - Do NOT merge, omit, or add strings.
+        - Translate long texts fully (no summarization).
+        - Language code rule: if a string is a language code (e.g., "en"), replace it with the correct code for {target_lang}.
+        Example: "en" → "fr" when {target_lang} is French.
 
-    Output requirements:
-    - Return ONLY valid JSON.
-    - JSON must be an array of exactly {len(strings)} strings.
-    - Order must match the input order.
-    - No comments, no explanations, no extra text.
+        Output requirements:
+        - Return ONLY valid JSON.
+        - JSON must be an array of exactly {len(strings)} strings.
+        - Order must match the input order.
+        - No comments, no explanations, no extra text.
 
-    Input strings:
-    {json.dumps(strings, ensure_ascii=False)}
+        Input strings:
+        {json.dumps(strings, ensure_ascii=False)}
 
-    Output format (strict):
-    [
-      "translation of string 1",
-      "translation of string 2",
-      ...
-    ]
+        Output format (strict):
+        [
+        "translation of string 1",
+        "translation of string 2",
+        ...
+        ]
     """
     # resp = await model.generate_content_async(prompt, generation_config={"response_mime_type": "application/json"})
     resp = await asyncio.to_thread(
@@ -581,11 +592,11 @@ async def translate_gemini_1(strings, target_lang, brand_tone, batch_num, type, 
     return await _translate_gemini(strings, target_lang, brand_tone, gemini_model_1, batch_num, type, provider)
 
 
-# async def translate_gemini_2(strings, target_lang, brand_tone):
-#     return await _translate_gemini(strings, target_lang, brand_tone, gemini_model_2)
+# # async def translate_gemini_2(strings, target_lang, brand_tone):
+# #     return await _translate_gemini(strings, target_lang, brand_tone, gemini_model_2)
 
 
-# ===================== BATCH TRANSLATION =====================
+# # ===================== BATCH TRANSLATION =====================
 
 async def _translate_batch(indexed_strings, target_lang, brand_tone, batch_num, total_batches, type, translation_progress=None, logs={}):
     global model_index_translation
@@ -601,7 +612,8 @@ async def _translate_batch(indexed_strings, target_lang, brand_tone, batch_num, 
     models_used = []
 
     async with semaphore_translation:
-        current_model = translation_model_cycle[model_index_translation % len(translation_model_cycle)]
+        current_model = translation_model_cycle[model_index_translation % len(
+            translation_model_cycle)]
         model_index_translation += 1
         logs[f"{type}_{batch_num}"]["print"] = f"\n[DEBUG] {type.upper()} Batch {batch_num}/{total_batches} via {current_model} → {len(strings)} strings"
         print(logs[f"{type}_{batch_num}"]["print"])
@@ -651,16 +663,64 @@ async def _translate_batch(indexed_strings, target_lang, brand_tone, batch_num, 
                     print(logs[f"{type}_{batch_num}"]["exc2"])
             else:
                 raise Exception("All providers failed!")
-            
+
         if translations:
             expected = len(strings)
             got = len(translations)
 
             if expected == got:
                 if translation_progress is not None:
-                        translation_progress["valid"] += 1
-                        logs[f"{type}_{batch_num}"]["valid"] = f"[TRANSLATION PROGRESS: valid] {translation_progress['valid']} valid, {translation_progress['partial']} partial, total {translation_progress['valid']+translation_progress['partial']}/{translation_progress['total']} ({type} batch {batch_num} via {current_model})"
-                        print(logs[f"{type}_{batch_num}"]["valid"])
+                    translation_progress["valid"] += 1
+                    logs[f"{type}_{batch_num}"][
+                        "valid"] = f"[TRANSLATION PROGRESS: valid] {translation_progress['valid']} valid, {translation_progress['partial']} partial, total {translation_progress['valid']+translation_progress['partial']}/{translation_progress['total']} ({type} batch {batch_num} via {current_model})"
+                    print(logs[f"{type}_{batch_num}"]["valid"])
+
+                    # --- Check for untranslatable or identical results ---
+                    final_pairs = []
+                    for (i, original), translated in zip(indexed_strings, translations):
+                        if not translated.strip() or translated.strip().lower() == original.strip().lower():
+                            print(
+                                f"⚠ Untranslatable detected → retrying fallback for index {i}")
+
+                            # Attempt a best AI guess using OpenAI model (force translate)
+                            try:
+                                fallback_prompt = f"""
+                                You are a translator. If this string is already in {target_lang} or cannot be translated literally,
+                                provide the closest natural-sounding version in {target_lang}. Keep placeholders unchanged.
+
+                                Text: {original}
+                                """
+                                fallback_resp = await openai_model_1.chat.completions.create(
+                                    model="gpt-4o-mini",
+                                    messages=[
+                                        {"role": "user", "content": fallback_prompt}],
+                                    temperature=0.7,
+                                )
+                                guess = fallback_resp.choices[0].message.content.strip(
+                                )
+                                if guess and guess.lower() != original.lower():
+                                    translations[indexed_strings.index(
+                                        (i, original))] = guess
+                                else:
+                                    # Still untranslatable → mark for review
+                                    translations[indexed_strings.index(
+                                        (i, original))] = original
+                                    # Flag for review during injection
+                                    TRANSLATION_STATS["fallbacks"]["openai1"].append(
+                                        {"index": i, "reason": "Untranslatable, needs review"})
+                            except Exception as e:
+                                print(
+                                    f"⚠ Fallback translation failed for index {i}: {e}")
+                                translations[indexed_strings.index(
+                                    (i, original))] = original
+                                TRANSLATION_STATS["fallbacks"]["openai1"].append(
+                                    {"index": i, "reason": str(e)})
+
+                        final_pairs.append(
+                            (i, translations[indexed_strings.index((i, original))]))
+
+                    return final_pairs
+
                 return [(i, t) for (i, _), t in zip(indexed_strings, translations)]
 
             # --- FIX: force align translations ---
@@ -669,7 +729,7 @@ async def _translate_batch(indexed_strings, target_lang, brand_tone, batch_num, 
                 logs[f"{type}_{batch_num}"]["padding"] = f"Expected {expected}, got {got} -> Padding {expected-got} from original batch"
                 print(logs[f"{type}_{batch_num}"]["padding"])
                 translations.extend(strings[got:])
-            else: # got > expected
+            else:  # got > expected
                 # Trim extras
                 translations = translations[:expected]
                 logs[f"{type}_{batch_num}"]["truncation"] = f"Expected {expected}, got {got} -> Truncating {got-expected} from translation batch"
@@ -684,10 +744,11 @@ async def _translate_batch(indexed_strings, target_lang, brand_tone, batch_num, 
                 })
                 TRANSLATION_STATS["mismatches"]["total_mismatched"] += abs(
                     expected - got)
-                
+
             if translation_progress is not None:
                 translation_progress["partial"] += 1
-                logs[f"{type}_{batch_num}"]["partial"] = f"[TRANSLATION PROGRESS: partial] {translation_progress['valid']} valid, {translation_progress['partial']} partial, total {translation_progress['valid']+translation_progress['partial']}/{translation_progress['total']} ({type} batch {batch_num} via {current_model})"
+                logs[f"{type}_{batch_num}"][
+                    "partial"] = f"[TRANSLATION PROGRESS: partial] {translation_progress['valid']} valid, {translation_progress['partial']} partial, total {translation_progress['valid']+translation_progress['partial']}/{translation_progress['total']} ({type} batch {batch_num} via {current_model})"
                 print(logs[f"{type}_{batch_num}"]["partial"])
             return [(i, t) for (i, _), t in zip(indexed_strings, translations)]
 
@@ -739,16 +800,41 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
                     if isinstance(v, str) and is_translateable(v):
                         positions.append(
                             (path + [k], v, ".".join(map(str, path + [k]))))
-                elif k == "translatableContent" and isinstance(v, list):
+
+                elif parent_key == "shopPolicies" and k == "translatableContent" and isinstance(v, list):
                     for i, item in enumerate(v):
                         if isinstance(item, dict):
-                            for field in ["value", "locale"]:
+                            for field in ["value", "locale"]:  # only pick value and locale
                                 if field in item and isinstance(item[field], str) and is_translateable(item[field]):
                                     positions.append(
                                         (path + [k, i, field], item[field],
                                          ".".join(map(str, path + [k, i, field])))
                                     )
 
+                elif k == "translatableContent" and isinstance(v, list):
+                    for i, item in enumerate(v):
+                        # if isinstance(item, dict):
+                        #     for field in ["value", "locale"]:
+                        #         if field in item and isinstance(item[field], str) and is_translateable(item[field]):
+                        #             positions.append(
+                        #                 (path + [k, i, field], item[field],
+                        #                  ".".join(map(str, path + [k, i, field])))
+                        #             )
+
+                        if isinstance(item, dict):
+                            # Handle ALL translatable fields in translatableContent
+                            for field in item:
+                                if field in ["value", "locale"] and isinstance(item[field], str) and is_translateable(item[field]):
+                                    positions.append(
+                                        (path + [k, i, field], item[field],
+                                         ".".join(map(str, path + [k, i, field])))
+                                    )
+
+                # Handle other common translatable fields
+                elif k in ["title", "body", "value", "altText", "description", "name"]:
+                    if isinstance(v, str) and is_translateable(v):
+                        positions.append(
+                            (path + [k], v, ".".join(map(str, path + [k]))))
                 else:
                     collect_strings(v, path + [k], k)
 
@@ -761,7 +847,8 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
         """
         Split text into chunks of <= max_len, trying to split at '.' boundaries.
         """
-        sentences = re.split(r'(?<=[.?!])\s+', text)  # split by sentence enders
+        sentences = re.split(
+            r'(?<=[.?!])\s+', text)  # split by sentence enders
         chunks, current = [], ""
 
         for sentence in sentences:
@@ -794,11 +881,12 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
                 chunks = split_into_chunks(text, max_len)
                 expanded.extend(chunks)
                 mapping.append((idx, len(chunks)))
-                print(f"Splitting string on index {idx} into {len(chunks)} parts")
+                print(
+                    f"Splitting string on index {idx} into {len(chunks)} parts")
             else:
                 expanded.append(text)
                 mapping.append((idx, 1))
-        
+
         return expanded, mapping
 
     # Recombine splitted strings with mapper
@@ -812,9 +900,9 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
             merged = " ".join(processed_expanded[pos:pos+count])
             collapsed.append(merged)
             pos += count
-            print(f"String at index {idx} recombined by joining {count} strings")
+            print(
+                f"String at index {idx} recombined by joining {count} strings")
         return collapsed
-    
 
     collect_strings(target_data)
 
@@ -825,10 +913,9 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
     for line in strings_to_translate:
         words = len(line.split(" "))
         counter += words
-    
+
     print(f"Total words in a string: {counter}")
 
-    
     expanded, mapping = expand_strings(strings_to_translate, max_len=5000)
     strings_to_classify = [(i, s) for i, s in enumerate(expanded)]
 
@@ -859,14 +946,16 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
 
     start = datetime.now()
 
-    classification_progress = {"valid": 0, "partial": 0, "total": total_batches}
+    classification_progress = {"valid": 0,
+                               "partial": 0, "total": total_batches}
 
     # Run classifications in parallel
     classification_tasks = []
-    
+
     for idx, batch in enumerate(batches):
-        classification_tasks.append(_classify_batch(batch, idx+1, total_batches, classification_progress=classification_progress))
-    
+        classification_tasks.append(_classify_batch(
+            batch, idx+1, total_batches, classification_progress=classification_progress))
+
     # all_classification_results = await asyncio.gather(*classification_tasks)
 
     results = []
@@ -877,18 +966,21 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
 
     # Flatten list of lists into a single list
     final_classification_pairs = [item
-              for sublist in all_classification_results
-              for item in sublist]
-    
+                                  for sublist in all_classification_results
+                                  for item in sublist]
+
     # ---------- RECOMBINE ----------
-    final_results = [l for _, l in sorted(final_classification_pairs, key=lambda x: x[0])]
+    final_results = [l for _, l in sorted(
+        final_classification_pairs, key=lambda x: x[0])]
 
     classified = [(i, s, l)
                   for i, (s, l) in enumerate(zip(expanded, final_results))]
 
     # STEP 2: Split into two groups, preserving index
-    business_items = [(i, s) for i, s, l in classified if (l.strip().lower()) == "business"]
-    ordinary_items = [(i, s) for i, s, l in classified if (l.strip().lower()) == "ordinary"]
+    business_items = [(i, s) for i, s, l in classified if (
+        l.strip().lower()) == "business"]
+    ordinary_items = [(i, s) for i, s, l in classified if (
+        l.strip().lower()) == "ordinary"]
 
     end = datetime.now()
     print(f"Total time consumed for classification: {end-start}")
@@ -900,8 +992,9 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
                         for i in range(0, len(business_items), TRANSLATION_BATCH_SIZE)]
     ordinary_batches = [ordinary_items[i:i+TRANSLATION_BATCH_SIZE]
                         for i in range(0, len(ordinary_items), TRANSLATION_BATCH_SIZE)]
-    
-    print(f"\nTotal {len(business_batches)} Business tasks are created, and {len(ordinary_batches)} Ordinary\n")
+
+    print(
+        f"\nTotal {len(business_batches)} Business tasks are created, and {len(ordinary_batches)} Ordinary\n")
 
     business_serialized = serialize_batches(business_batches, "business")
     ordinary_serialized = serialize_batches(ordinary_batches, "ordinary")
@@ -911,7 +1004,8 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
         "ordinary_batches": ordinary_serialized
     }
 
-    batches_file = os.path.join(LOG_DIR, f"batches_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    batches_file = os.path.join(
+        LOG_DIR, f"batches_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
     with open(batches_file, "w", encoding="utf-8") as f:
         json.dump(batches_data, f, ensure_ascii=False, indent=2)
 
@@ -927,11 +1021,11 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
 
     for idx, batch in enumerate(business_batches):
         translation_tasks.append(_translate_batch(batch, target_lang, brand_tone, idx+1,
-                     len(business_batches), type="business", translation_progress=translation_progress, logs=logs))
+                                                  len(business_batches), type="business", translation_progress=translation_progress, logs=logs))
 
     for idx, batch in enumerate(ordinary_batches):
         translation_tasks.append(_translate_batch(batch, target_lang, brand_tone, idx+1,
-                     len(ordinary_batches), type="ordinary", translation_progress=translation_progress, logs=logs))
+                                                  len(ordinary_batches), type="ordinary", translation_progress=translation_progress, logs=logs))
 
     random.shuffle(translation_tasks)
 
@@ -943,19 +1037,18 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
         results.append(res)
     all_translation_results = results
 
-    
     with open(console_file, "a", encoding="utf-8") as f:
         json.dump(logs, f, ensure_ascii=False, indent=4)
 
-
     # Flatten already-indexed results
     final_translation_pairs = [pair
-                   for batch in all_translation_results
-                   if batch is not None
-                   for pair in batch]
+                               for batch in all_translation_results
+                               if batch is not None
+                               for pair in batch]
 
     # ---------- RECOMBINE ----------
-    final_results = [t for _, t in sorted(final_translation_pairs, key=lambda x: x[0])]
+    final_results = [t for _, t in sorted(
+        final_translation_pairs, key=lambda x: x[0])]
     final_results = collapse_strings(final_results, mapping)
     end = datetime.now()
     print(f"Total time consumed for translation: {end-start}")
@@ -969,37 +1062,69 @@ async def fast_translate_json(target_data, target_lang, brand_tone):
         )
     print(f"Saved comparison strings to {comparative_file}")
 
-    # ---------- INJECTION ----------
-    # def set_value(d, path, value):
-    #     ref = d
-    #     for p in path[:-1]:
-    #         ref = ref[p]
-    #     ref[path[-1]] = value
+#     # ---------- INJECTION ----------
+#     # # def set_value(d, path, value):
+#     #     ref = d
+#     #     for p in path[:-1]:
+#     #         ref = ref[p]
+#     #     ref[path[-1]] = value
+#     def set_value_with_original(d, path, translated):
+#         #     ref = d
+#         #     for p in path[:-1]:
+#         #         ref = ref[p]
+#         #     ref[path[-1]] = value
 
-    def set_value_with_original(d, path, translated):
+    def set_value_with_original(d, path, translated, path_str):
         ref = d
         for p in path[:-1]:
             ref = ref[p]
+
         last_key = path[-1]
         original_value = ref[last_key]
+
+        # Keep original
         prefixed_key = f"original{last_key[0].upper()}{last_key[1:]}"
         if prefixed_key not in ref:
             ref[prefixed_key] = original_value
+
+        # Inject translation
         ref[last_key] = translated
+
+        # Inject path_<field>
+        path_key = f"path_{last_key}"
+        ref[path_key] = path_str
+
+        # Inject AI flag (success if translated != original)
+        flag_key = f"aiTranslated_{last_key}"
+        ref[flag_key] = (translated.strip() != original_value.strip())
+        # Mark priority review if untranslatable
+        priority_key = f"priorityReview_{last_key}"
+        ref[priority_key] = (translated.strip() == original_value.strip())
 
     injected_log = []
     counter = 0
+    # for i, translated in enumerate(final_results):
+    #     path, orig_val, path_str = positions[i]
+    #     set_value_with_original(target_data, path, translated)
+    #     injected_log.append({"path": path_str, "translated": translated})
+    #     counter += 1
+
     for i, translated in enumerate(final_results):
         path, orig_val, path_str = positions[i]
-        set_value_with_original(target_data, path, translated)
-        injected_log.append({"path": path_str, "translated": translated})
+        set_value_with_original(target_data, path, translated, path_str)
+        injected_log.append({
+            "path": path_str,
+            "original": orig_val,
+            "translated": translated,
+            "aiTranslated": translated.strip() != orig_val.strip()
+        })
         counter += 1
 
     print(f"Total {counter} strings are injected")
 
     # ---- SAVE INJECTED ----
     injected_file = os.path.join(
-        LOG_DIR, f"injected_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        LOG_DIR, f"today_injected_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
     with open(injected_file, "w", encoding="utf-8") as f:
         json.dump(injected_log, f, ensure_ascii=False, indent=2)
     print(f"Saved injected strings to {injected_file}")
