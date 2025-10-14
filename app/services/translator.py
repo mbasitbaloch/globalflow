@@ -13,6 +13,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from ..config import settings
 from qdrant_client import QdrantClient
 from app.services.hs_langchain import fewshotTranslation, TranslationQuery, promptClassification, voteClassification, SafeJsonParser
+from ..utils.cache_manager import get_cached_string, set_cached_string
 from ..utils.tasks import store_examples
 from pydantic import SecretStr
 from qdrant_client.http import models
@@ -910,7 +911,18 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
     unique_texts, index_map = dedup_with_index_map(expanded)
     strings_to_classify = [(i, s) for i, s in enumerate(unique_texts)]
 
+    cached_results = []
+    uncached = []
+
+    for i, s in strings_to_classify:
+        cached_string = get_cached_string(target_lang, brand_tone, s)
+        if cached_string is not None:
+            cached_results.append((i, cached_string))
+        else:
+            uncached.append((i, s))
+
     print(f"Total strings to be processed after deduplication and chunking: {len(unique_texts)}")
+    print(f"Total strings to be processed and are uncached: {len(uncached)}")
 
     # ---- SAVE EXTRACTED ----
     extracted_log = [{"path": p, "string": s} for _, s, p in positions]
@@ -933,8 +945,8 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
         return serialized
 
     # ---- CLASSIFY ----
-    batches = [strings_to_classify[i:i+CLASSIFICATION_BATCH_SIZE]
-               for i in range(0, len(strings_to_classify), CLASSIFICATION_BATCH_SIZE)]
+    batches = [uncached[i:i+CLASSIFICATION_BATCH_SIZE]
+               for i in range(0, len(uncached), CLASSIFICATION_BATCH_SIZE)]
     total_batches = len(batches)
 
     start = datetime.now()
@@ -1100,6 +1112,11 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
     # ---------- RECOMBINE ----------
     final_results = [t for _, t in sorted(
         final_translation_pairs, key=lambda x: x[0])]
+    for (i, string), processed in zip(uncached, final_results):
+        set_cached_string(target_lang, brand_tone, string, processed)
+    final_results = [t for _, t in sorted(
+        final_translation_pairs+cached_results, key=lambda x: x[0])]
+
     for i in range(len(final_results)):
         if final_results[i] == locale:
             print(f"Locale not translated, converting manually")

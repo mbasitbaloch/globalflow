@@ -146,46 +146,62 @@ def invalidate_full_translation_cache(shop_domain: str, target_lang: str, brand_
     redis_client.delete(raw_key)
 
 
-def get_cached_classification(target_lang, brand_tone, text):
-    key = _make_cache_key_flex(
-        target_lang, brand_tone, text, include_domain=False)
-    cached = redis_client.get(f"classify:{key}") # type: ignore
-    return json.loads(cached) if cached else None # type: ignore
+# By Mr Hassan
 
 
-def set_cached_classification(target_lang, brand_tone, text, label):
-    key = _make_cache_key_flex(
-        target_lang, brand_tone, text, include_domain=False)
-    redis_client.setex(f"classify:{key}", 60 * # type: ignore
-                       60*24*30, json.dumps(label))  # 7d TTL
-
-# Similar for vote: key on f"{text}:{initial_label}"
-
-
-# cache_key = f"{text}:{initial_label}"
-def get_cached_vote(target_lang, brand_tone, cache_key):
+def get_cached_string(target_lang, brand_tone, string):
     flex_key = _make_cache_key_flex(
-        target_lang, brand_tone, cache_key, include_domain=False)
-    cached = redis_client.get(f"vote:{flex_key}") # type: ignore
+        target_lang, brand_tone, string, include_domain=False)
+    cached = redis_client.get(f"string:{flex_key}") # type: ignore
     return json.loads(cached) if cached else None # type: ignore
 
 
-def set_cached_vote(target_lang, brand_tone, cache_key, vote):
+def set_cached_string(target_lang, brand_tone, string, processed):
     flex_key = _make_cache_key_flex(
-        target_lang, brand_tone, cache_key, include_domain=False)
-    redis_client.setex(f"vote:{flex_key}", 60*60*24*30, json.dumps(vote)) # type: ignore
+        target_lang, brand_tone, string, include_domain=False)
+    redis_client.setex(f"string:{flex_key}",  # type: ignore
+                       60*60*24*30, json.dumps(processed))  # 30d TTL
+
+# def get_cached_classification(target_lang, brand_tone, text):
+#     key = _make_cache_key_flex(
+#         target_lang, brand_tone, text, include_domain=False)
+#     cached = redis_client.get(f"classify:{key}") # type: ignore
+#     return json.loads(cached) if cached else None # type: ignore
 
 
-def get_cached_full_process(target_lang, brand_tone, text):
-    key = _make_cache_key_flex(
-        target_lang, brand_tone, text, include_domain=False)
-    cached = redis_client.get(f"fullprocess:{key}") # type: ignore
-    return json.loads(cached) if cached else None # type: ignore
+# def set_cached_classification(target_lang, brand_tone, text, label):
+#     key = _make_cache_key_flex(
+#         target_lang, brand_tone, text, include_domain=False)
+#     redis_client.setex(f"classify:{key}",  # type: ignore
+#                        60*60*24*30, json.dumps(label))  # 30d TTL
+
+# # Similar for vote: key on f"{text}:{initial_label}"
 
 
-# {"voted_label": , "translation": }
-def set_cached_full_process(target_lang, brand_tone, text, process_data):
-    key = _make_cache_key_flex(
-        target_lang, brand_tone, text, include_domain=False)
-    redis_client.setex( # type: ignore
-        f"fullprocess:{key}", 60*60*24*30, json.dumps(process_data))  # 30d
+# # cache_key = f"{text}:{initial_label}"
+# def get_cached_vote(target_lang, brand_tone, cache_key):
+#     flex_key = _make_cache_key_flex(
+#         target_lang, brand_tone, cache_key, include_domain=False)
+#     cached = redis_client.get(f"vote:{flex_key}") # type: ignore
+#     return json.loads(cached) if cached else None # type: ignore
+
+
+# def set_cached_vote(target_lang, brand_tone, cache_key, vote):
+#     flex_key = _make_cache_key_flex(
+#         target_lang, brand_tone, cache_key, include_domain=False)
+#     redis_client.setex(f"vote:{flex_key}", 60*60*24*30, json.dumps(vote)) # type: ignore
+
+
+# def get_cached_full_process(target_lang, brand_tone, text):
+#     key = _make_cache_key_flex(
+#         target_lang, brand_tone, text, include_domain=False)
+#     cached = redis_client.get(f"fullprocess:{key}") # type: ignore
+#     return json.loads(cached) if cached else None # type: ignore
+
+
+# # {"voted_label": , "translation": }
+# def set_cached_full_process(target_lang, brand_tone, text, process_data):
+#     key = _make_cache_key_flex(
+#         target_lang, brand_tone, text, include_domain=False)
+#     redis_client.setex( # type: ignore
+#         f"fullprocess:{key}", 60*60*24*30, json.dumps(process_data))  # 30d
