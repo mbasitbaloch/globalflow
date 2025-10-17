@@ -127,8 +127,6 @@ model_index_translation = 0
 sys.setrecursionlimit(3000)
 
 
-
-
 # ===================== HELPERS =====================
 def is_translateable(text: str) -> bool:
     unused = [
@@ -177,7 +175,7 @@ def is_translateable(text: str) -> bool:
         return False
     if re.match(r"^\{\{.*\}\}$", text):
         return False
-    if "@" in text and "." in text:
+    if re.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", text.strip()):
         return False
     if re.match(r"^https?://", text):
         return False
@@ -219,7 +217,9 @@ async def with_retry(fn, *args, retries=3, **kwargs):
                     f"⚠ Error in, batch {type} {batch_num}, {provider}: {e}")
                 await asyncio.sleep(2)
                 break
-    raise Exception(f"Max retries reached for {type} {batch_num} by {provider}")
+    raise Exception(
+        f"Max retries reached for {type} {batch_num} by {provider}")
+
 
 def qdrant_examples(shopDomain, targetLanguage, user_id):
     start = datetime.now()
@@ -250,7 +250,6 @@ def qdrant_examples(shopDomain, targetLanguage, user_id):
         field_schema=models.PayloadSchemaType.KEYWORD
     )
 
-
     scroll_results, _ = qdrant.scroll(
         collection_name=qdrant_collection,
         scroll_filter=models.Filter(
@@ -278,8 +277,9 @@ def qdrant_examples(shopDomain, targetLanguage, user_id):
     )
 
     for point in scroll_results:
-        fewshot_data = point.payload.get("fewshot_data") if point.payload else None
-    
+        fewshot_data = point.payload.get(
+            "fewshot_data") if point.payload else None
+
     examples = []
     if fewshot_data:
         if isinstance(fewshot_data, str):
@@ -299,17 +299,20 @@ def qdrant_examples(shopDomain, targetLanguage, user_id):
                 "translated": json.dumps([ex.get("translated", "") for ex in fewshot_data[100:150]], ensure_ascii=False)
             },
         ]
-    
+
     end = datetime.now()
-    print(f"Examples for fewshot retrieved from qdrant, time taken: {end-start}")
+    print(
+        f"Examples for fewshot retrieved from qdrant, time taken: {end-start}")
     return examples
 
 # # ===================== CLASSIFICATION FUNCTIONS =====================
+
+
 async def _classify_openai(strings_batch, classification_model):
     """
     Classify strings into 'business' or 'ordinary'.
     """
-    
+
     labels = await promptClassification(classification_model, strings_batch)
     # return [clean_line(label) for label in labels]
 
@@ -345,7 +348,7 @@ async def _classify_gemini(strings_batch, classification_model):
     """
     Classify strings into 'business' or 'ordinary'.
     """
-    
+
     labels = await promptClassification(classification_model, strings_batch)
     # return [clean_line(label) for label in labels]
 
@@ -436,7 +439,7 @@ async def _vote_openai(strings_batch, voting_model):
     """
     Vote classification results.
     """
-    
+
     votes = await voteClassification(voting_model, strings_batch)
     # return [clean_line(vote) for vote in votes]
     return votes
@@ -501,7 +504,8 @@ async def _voting_batch(strings_batch, batch_num, total_batches, voting_progress
         except Exception as e:
             if voting_progress is not None:
                 voting_progress["partial"] += 1
-                print(f"[VOTING PROGRESS: failed] {voting_progress['valid']} valid, {voting_progress['partial']} partial, total {voting_progress['valid']+voting_progress['partial']}/{voting_progress['total']} (batch {batch_num} via {current_model})")
+                print(
+                    f"[VOTING PROGRESS: failed] {voting_progress['valid']} valid, {voting_progress['partial']} partial, total {voting_progress['valid']+voting_progress['partial']}/{voting_progress['total']} (batch {batch_num} via {current_model})")
             return [(i, v) for (i, _, _), v in zip(strings_batch, raw_votes)]
 
         if votes:
@@ -511,7 +515,8 @@ async def _voting_batch(strings_batch, batch_num, total_batches, voting_progress
             if expected == got:
                 if voting_progress is not None:
                     voting_progress["valid"] += 1
-                    print(f"[VOTING PROGRESS: valid] {voting_progress['valid']} valid, {voting_progress['partial']} partial, total {voting_progress['valid']+voting_progress['partial']}/{voting_progress['total']} (batch {batch_num} via {current_model})")
+                    print(
+                        f"[VOTING PROGRESS: valid] {voting_progress['valid']} valid, {voting_progress['partial']} partial, total {voting_progress['valid']+voting_progress['partial']}/{voting_progress['total']} (batch {batch_num} via {current_model})")
                 return [(i, v) for (i, _, _), v in zip(strings_batch, votes)]
             # --- FIX: force align translations ---
             elif got < expected:
@@ -524,16 +529,17 @@ async def _voting_batch(strings_batch, batch_num, total_batches, voting_progress
 
             if voting_progress is not None:
                 voting_progress["partial"] += 1
-                print(f"[VOTING PROGRESS: partial] {voting_progress['valid']} valid, {voting_progress['partial']} partial, total {voting_progress['valid']+voting_progress['partial']}/{voting_progress['total']} (batch {batch_num} via {current_model})")
+                print(
+                    f"[VOTING PROGRESS: partial] {voting_progress['valid']} valid, {voting_progress['partial']} partial, total {voting_progress['valid']+voting_progress['partial']}/{voting_progress['total']} (batch {batch_num} via {current_model})")
             return [(i, v) for (i, _, _), v in zip(strings_batch, votes)]
 
 
 # ===================== TRANSLATION FUNCTIONS =====================
 async def _translate_openai(strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, model, batch_num, type, provider):
     query = TranslationQuery(
-        input=strings, 
+        input=strings,
         user_id=user_id,
-        shopDomain=shopDomain,                
+        shopDomain=shopDomain,
         targetLanguage=target_lang,
         brandTone=brand_tone,
         industry=industry,
@@ -572,9 +578,9 @@ async def translate_openai_2(strings, examples, user_id, shopDomain, target_lang
 
 async def _translate_gemini(strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, model, batch_num, type, provider):
     query = TranslationQuery(
-        input=strings, 
+        input=strings,
         user_id=user_id,
-        shopDomain=shopDomain, 
+        shopDomain=shopDomain,
         targetLanguage=target_lang,
         brandTone=brand_tone,
         industry=industry,
@@ -674,7 +680,8 @@ async def _translate_batch(indexed_strings, examples, user_id, shopDomain, targe
                     logs[f"{type}_{batch_num}"]["exc2"] = f"⚠ Fallback {current_model} also failed for {type} batch {batch_num}: {e2}"
                     print(logs[f"{type}_{batch_num}"]["exc2"])
             else:
-                raise Exception("All providers failed for {type} batch {batch_num}")
+                raise Exception(
+                    "All providers failed for {type} batch {batch_num}")
 
         if translations:
             expected = len(strings)
@@ -765,7 +772,7 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
                     if isinstance(v, str) and is_translateable(v):
                         positions.append(
                             (path + [k], v, ".".join(map(str, path + [k]))))
-                       
+
                         # SHOP POLICIES - translatableContent → only value + locale
                 elif parent_key == "shopPolicies" and k == "translatableContent" and isinstance(v, list):
                     for i, item in enumerate(v):
@@ -776,7 +783,7 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
                                         (path + [k, i, field], item[field],
                                          ".".join(map(str, path + [k, i, field])))
                                     )
-                
+
                 # TRANSLATABLE CONTENT - COMPLETE HANDLING (including locale)
                 elif k == "translatableContent" and isinstance(v, list):
                     for i, item in enumerate(v):
@@ -921,7 +928,8 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
         else:
             uncached.append((i, s))
 
-    print(f"Total strings to be processed after deduplication and chunking: {len(unique_texts)}")
+    print(
+        f"Total strings to be processed after deduplication and chunking: {len(unique_texts)}")
     print(f"Total strings to be processed and are uncached: {len(uncached)}")
 
     # ---- SAVE EXTRACTED ----
@@ -982,7 +990,7 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
 
     classified = [(index, string, label)
                   for index, (string, label) in enumerate(zip(unique_texts, final_results))]
-    
+
     end = datetime.now()
     print(f"Total time consumed for classification: {end-start}")
 
@@ -993,10 +1001,10 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
 
     print(
         f"[CLASSIFY] Business: {len(business_items)}, Ordinary: {len(ordinary_items)}")
-    
+
     # ---- VOTE ----
     voting_batches = [classified[i:i+VOTING_BATCH_SIZE]
-               for i in range(0, len(classified), VOTING_BATCH_SIZE)]
+                      for i in range(0, len(classified), VOTING_BATCH_SIZE)]
     total_batches = len(voting_batches)
 
     start = datetime.now()
@@ -1029,7 +1037,7 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
 
     final_results = [vote for _, vote in sorted(
         final_voting_pairs, key=lambda x: x[0])]
-    
+
     verified = []
     for (i, s, l), v in zip(classified, final_results):
         if v is False:
@@ -1038,7 +1046,6 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
 
     end = datetime.now()
     print(f"Total time consumed for voting: {end-start}")
-    
 
     # STEP 2: Split into two groups, preserving index
     business_items = [(i, s) for i, s, l in verified if (
@@ -1122,7 +1129,8 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
             print(f"Locale not translated, converting manually")
             final_results[i] = target_lang
     print(f"Total strings retained after processing: {len(final_results)}")
-    final_results = reconstruct_from_map(final_results, unique_texts, index_map, len(expanded))
+    final_results = reconstruct_from_map(
+        final_results, unique_texts, index_map, len(expanded))
     final_results = collapse_strings(final_results, mapping)
     end = datetime.now()
     print(f"Total time consumed for translation: {end-start}")
@@ -1140,7 +1148,8 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
             counter += 1
         else:
             continue
-    print(f"Saved comparison strings to {comparative_file}, total {counter} strings are not translated, i.e. same as original.")
+    print(
+        f"Saved comparison strings to {comparative_file}, total {counter} strings are not translated, i.e. same as original.")
 
     # ---------- INJECTION ----------
     # # def set_value(d, path, value):
@@ -1181,10 +1190,10 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
         # Mark priority review if untranslatable
         priority_key = f"priorityReview_{last_key}"
         ref[priority_key] = (translated.strip() == original_value.strip())
-        
 
     injected_log = []
     counter = 0
+    local_counter = 0
     # for i, translated in enumerate(final_results):
     #     path, orig_val, path_str = positions[i]
     #     set_value_with_original(target_data, path, translated)
@@ -1207,8 +1216,9 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
             if orig_val == locale and translated == target_lang:
                 continue
             else:
-                print(f"mismatching at index {i}")
+                local_counter += 1
 
+    print(f"total mismatching of locales {local_counter}")
 
     print(f"Total {counter} strings are injected")
 
@@ -1224,6 +1234,7 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, bra
     save_report()
 
     print("Celery task started...")
-    task = store_examples.delay(strings_to_translate, final_results, paths_array, shopDomain, target_lang, brand_tone) # type: ignore
+    task = store_examples.delay(strings_to_translate, final_results,
+                                paths_array, shopDomain, target_lang, brand_tone)  # type: ignore
     print(f"New task ID: {task.id}")
     return target_data

@@ -5,6 +5,7 @@ import copy  # For deep copy on cache loads (prevents mutations)
 from redis import Redis
 from app.config import settings
 import uuid
+from typing import Optional, Dict, Any, Tuple
 
 # Initialize Redis client
 try:
@@ -20,6 +21,10 @@ try:
 except Exception as e:
     print(f"Redis connection failed: {e}. Falling back to no-cache mode.")
     redis_client = None  # Disable cache if down
+
+
+def _sha1(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
 
 def _make_cache_key(shop_domain: str, target_lang: str, brand_tone: str, text: str) -> str:
@@ -50,7 +55,7 @@ def get_translation_from_cache(shop_domain: str, target_lang: str, brand_tone: s
     cached_value = redis_client.get(key)
     if cached_value:
         print(f"Cache hit: {text[:40]}...")
-        return json.loads(cached_value) # type: ignore
+        return json.loads(cached_value)  # type: ignore
     return None
 
 
@@ -93,15 +98,17 @@ def get_full_translation_from_cache(shop_domain: str, target_lang: str, brand_to
     cached_value = redis_client.get(key)
     if cached_value:
         try:
-            cache_data = json.loads(cached_value) # type: ignore
+            cache_data = json.loads(cached_value)  # type: ignore
             if cache_data.get("raw_hash") == current_raw_hash:
-                print(f"Full JSON cache HIT (hash match) for {shop_domain}:{target_lang}:{brand_tone}")
+                print(
+                    f"Full JSON cache HIT (hash match) for {shop_domain}:{target_lang}:{brand_tone}")
                 file_name = f"Today_translated_{uuid.uuid4().hex}.json"
                 file_path = os.path.join("tmp", file_name)
                 os.makedirs("tmp", exist_ok=True)
 
                 with open(file_path, "w", encoding="utf-8") as f:
-                    json.dump(cache_data["translated"], f, ensure_ascii=False, indent=2)
+                    json.dump(cache_data["translated"], f,
+                              ensure_ascii=False, indent=2)
                 print("Translated JSON saved to file:", file_path)
                 return copy.deepcopy(cache_data["translated"])
             else:
@@ -146,21 +153,99 @@ def invalidate_full_translation_cache(shop_domain: str, target_lang: str, brand_
     redis_client.delete(raw_key)
 
 
+def get_cached_extracted_data(cache_key: str):
+    if not redis_client:
+        return None
+    cached = redis_client.get(cache_key)
+    return json.loads(cached) if cached else None
+
+
+def cache_extracted_data(cache_key: str, data: list):
+    if not redis_client:
+        return
+    redis_client.setex(cache_key, 60*60*24*30, json.dumps(data))
+
+
+def invalidate_extracted_data_cache(shop_domain: str, target_lang: str):
+    """
+    Invalidate the extracted data cache for a specific shopDomain and targetLanguage.
+    """
+    if not redis_client:
+        return
+    cache_key = f"shopify_data:{shop_domain}:{target_lang}"
+    redis_client.delete(cache_key)
+    print(f"Extracted data cache INVALIDATED for {shop_domain}:{target_lang}")
+
+
 # By Mr Hassan
-
-
 def get_cached_string(target_lang, brand_tone, string):
+    if not redis_client:
+        return None
     flex_key = _make_cache_key_flex(
         target_lang, brand_tone, string, include_domain=False)
-    cached = redis_client.get(f"string:{flex_key}") # type: ignore
-    return json.loads(cached) if cached else None # type: ignore
+    cached = redis_client.get(f"string:{flex_key}")
+    return json.loads(cached) if cached else None
 
 
 def set_cached_string(target_lang, brand_tone, string, processed):
+    if not redis_client:
+        return
     flex_key = _make_cache_key_flex(
         target_lang, brand_tone, string, include_domain=False)
-    redis_client.setex(f"string:{flex_key}",  # type: ignore
-                       60*60*24*30, json.dumps(processed))  # 30d TTL
+    redis_client.setex(
+        f"string:{flex_key}", 60*60*24*30, json.dumps(processed))
+
+
+# ----------------- Suggestion caching -----------------
+def suggestion_cache_key(tenant_id: str, lang_pair: str, domain: str, segment_hash: str) -> str:
+    return f"sugg:{tenant_id}:{lang_pair}:{domain}:{segment_hash}"
+
+
+def get_suggestions_from_cache(tenant_id: str, lang_pair: str, domain: str, text: str) -> Optional[Dict[str, Any]]:
+    key = suggestion_cache_key(tenant_id, lang_pair, domain, _sha1(text))
+    raw = redis_client.get(key)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def set_suggestions_in_cache(tenant_id: str, lang_pair: str, domain: str, text: str, payload: dict, ttl_seconds: int = 60*60*24*7):
+    key = suggestion_cache_key(tenant_id, lang_pair, domain, _sha1(text))
+    redis_client.setex(key, ttl_seconds, json.dumps(
+        payload, ensure_ascii=False))
+
+
+def invalidate_suggestions_for_tenant(tenant_id: str):
+    pattern = f"sugg:{tenant_id}:*"
+    for k in redis_client.scan_iter(match=pattern):
+        redis_client.delete(k)
+
+# ----------------- Style pack cache -----------------
+
+
+def stylepack_cache_key(tenant_id: str, language_pair: str, domain: str, country: str) -> str:
+    return f"stylepack:{tenant_id}:{language_pair}:{domain}:{country}"
+
+
+def get_stylepack_from_cache(tenant_id: str, language_pair: str, domain: str, country: str):
+    key = stylepack_cache_key(tenant_id, language_pair, domain, country)
+    raw = redis_client.get(key)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except:
+        return None
+
+
+def set_stylepack_in_cache(tenant_id: str, language_pair: str, domain: str, country: str, payload: dict, ttl_seconds: int = 60*60*24*7):
+    key = stylepack_cache_key(tenant_id, language_pair, domain, country)
+    redis_client.setex(key, ttl_seconds, json.dumps(
+        payload, ensure_ascii=False))
+
 
 # def get_cached_classification(target_lang, brand_tone, text):
 #     key = _make_cache_key_flex(

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, Form, Depends
 from sqlalchemy.orm import Session
 from ..database import SessionLocal
-from .. import models
+from ..models import models
 from ..workers.tasks import generate_embedding
 from ..services.rag import embed_and_store
 from ..services.translator import fast_translate_json

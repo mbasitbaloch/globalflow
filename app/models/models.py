@@ -1,7 +1,7 @@
 from sqlalchemy import Boolean, Column, Integer, String, Text, ForeignKey, DateTime, func
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
-from .database import Base
+from ..database import Base
 
 
 class Translation(Base):
