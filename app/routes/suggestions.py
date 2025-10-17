@@ -126,7 +126,7 @@ def suggestions_apply(req: ApplyRequest, db: Session = Depends(get_db)):
                 pass
 
     db.commit()
-    return {"status": "ok", "message": "action recorded"}
+    return {"status": "ok", "message": "Changes are applied and action recorded"}
 
 
 @router.get("/style-pack")
