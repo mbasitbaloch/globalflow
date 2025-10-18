@@ -2,26 +2,35 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional
-from ..services.suggestion_engine import produce_suggestions, load_style_pack
+from sqlalchemy.orm import Session
+from ..services.suggestion_engine import produce_suggestions, load_style_pack, update_translation_json
 from ..database import SessionLocal
 from app.routes.ingest import get_db
 from ..models.suggestion import Suggestion, SuggestionAudit
+from ..models.models import Translation
 from sqlalchemy.orm import Session
 from ..utils.cache_manager import invalidate_suggestions_for_tenant
+from ..config import settings
 import uuid
 import json
 from ..config import settings
+import logging
+
+
+logger = logging.getLogger("suggestions_api")
+
 
 router = APIRouter(prefix="/suggestions", tags=["suggestions"])
 
 
 class Segment(BaseModel):
-    id: str
+    path: str
     text: str
 
 
 class GenerateRequest(BaseModel):
     tenant_id: str
+    translation_id: int
     doc_type: str
     domain: str
     country: str
@@ -34,7 +43,8 @@ class GenerateRequest(BaseModel):
 
 class ApplyRequest(BaseModel):
     tenant_id: str
-    segment_id: str
+    translation_id: int
+    path: str
     suggestion_id: str
     user_id: Optional[str] = None
     action: str  # "accept"|"reject"
@@ -48,6 +58,10 @@ async def suggestions_generate(req: GenerateRequest, db: Session = Depends(get_d
     # validate segments
     if not req.segments or len(req.segments) == 0:
         raise HTTPException(status_code=400, detail="segments required")
+
+    logger.info(f"[generate] Tenant={req.tenant_id} Domain={req.domain}")
+    logger.info("[generate] Loading style pack and checking cache...")
+
     # call engine
     out = await produce_suggestions(
         tenant_id=req.tenant_id,
@@ -60,38 +74,45 @@ async def suggestions_generate(req: GenerateRequest, db: Session = Depends(get_d
         glossary=req.glossary,
         compliance_patterns=req.compliance_patterns
     )
-
+    logger.info("[generate] Suggestions generated successfully.")
+    logger.info("[generate] Storing results in PostgreSQL...")
     # store suggestions in DB (for audit & indexing)
     for seg in out["suggestions"]:
         s_model = Suggestion(
             tenant_id=req.tenant_id,
+            translation_id=req.translation_id,
             doc_type=req.doc_type,
             domain=req.domain,
             language_pair=req.language_pair,
-            segment_id=seg["segment_id"],
+            path=seg["path"],
             original_text=seg["original"],
             suggestions=seg["suggestions"]
         )
         db.add(s_model)
     db.commit()
+    logger.info("[generate] Suggestions stored successfully in PostgreSQL.")
 
     return {"status": "ok", "data": out}
 
 
 @router.post("/apply")
-def suggestions_apply(req: ApplyRequest, db: Session = Depends(get_db)):
+async def suggestions_apply(req: ApplyRequest, db: Session = Depends(get_db)):
     """
     Accept or reject a suggestion. This persists an audit entry and (for accept) writes the change into Suggestion table.
     Frontend should itself update displayed text (we store audit + updated suggestion record).
     """
+    logger.info(
+        f"[apply] Applying suggestion {req.suggestion_id} | Action={req.action}")
+
     if req.action not in ("accept", "reject"):
         raise HTTPException(status_code=400, detail="invalid action")
     # audit write
     audit = SuggestionAudit(
-        suggestion_id=None,
+        suggestion_id=req.suggestion_id,
+        translation_id=req.translation_id,
         tenant_id=req.tenant_id,
         user_id=req.user_id,
-        segment_id=req.segment_id,
+        path=req.path,
         suggestion_hash=str(uuid.uuid4()),
         action=req.action,
         suggestion_type=None,
@@ -100,32 +121,36 @@ def suggestions_apply(req: ApplyRequest, db: Session = Depends(get_db)):
         metadata=req.metadata
     )
     db.add(audit)
+    logger.info("[apply] Audit record added.")
 
-    # if accept -> update persisted suggestion record if exists
     if req.action == "accept":
-        # Find most recent Suggestion for tenant+segment
-        existing = db.query(Suggestion).filter_by(tenant_id=req.tenant_id,
-                                                  segment_id=req.segment_id).order_by(Suggestion.created_at.desc()).first()
-        if existing:
-            # update suggestions array: mark suggestion_id accepted where possible
-            try:
-                suggestions = existing.suggestions or []
-                # we will append an audit field; front-end still receives new text directly
-                db_sugg = {
-                    "accepted_suggestion_id": req.suggestion_id,
-                    "accepted_by": req.user_id,
-                    "accepted_at": datetime.utcnow().isoformat(),
-                    "before": req.before,
-                    "after": req.after
-                }
-                # attach to metadata area inside suggestions record
-                existing.suggestions = {
-                    "applied": db_sugg, "previous": suggestions}
-                db.add(existing)
-            except Exception as e:
-                pass
+        try:
+            logger.info("[apply] Fetching translation record...")
+            translation = db.query(Translation).filter_by(
+                id=req.translation_id).first()
+            if not translation:
+                raise HTTPException(
+                    status_code=404, detail="Translation not found")
+
+            logger.info("[apply] Updating JSON path in translation data...")
+            updated_json = await update_translation_json(translation, req.path, req.after)
+            translation.translated_text_json = updated_json
+            translation.translated_text_raw = json.dumps(
+                updated_json, ensure_ascii=False)
+            translation.updated_at = datetime.utcnow()
+
+            db.add(translation)
+            db.commit()
+            logger.info(
+                "[apply] Translation updated successfully in PostgreSQL.")
+
+        except Exception as e:
+            logger.exception(f"[apply] Failed to update translation: {e}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to update translation: {e}")
 
     db.commit()
+    logger.info("[apply] Action recorded successfully.")
     return {"status": "ok", "message": "Changes are applied and action recorded"}
 
 

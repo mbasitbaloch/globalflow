@@ -63,20 +63,66 @@ def load_style_pack(tenant_id: str, language_pair: str, domain: str, country: st
 # ----------------- compliance / glossary gates -----------------
 
 
-def find_forbidden_matches(text: str, glossary: List[str], compliance_patterns: List[str]) -> Dict[str, List[str]]:
-    """Return dict with keys 'glossary' and 'compliance' containing matched tokens"""
+def find_forbidden_matches(
+    text: str, glossary: List[str], compliance_patterns: List[str]
+) -> Dict[str, List[str]]:
+    """
+    Return dict with keys 'glossary' and 'compliance' containing matched tokens.
+    Handles invalid regex patterns gracefully and logs only once globally.
+    """
     matches = {"glossary": [], "compliance": []}
+    bad_patterns = []
+
     for g in glossary or []:
-        if g and re.search(re.escape(g), text, flags=re.IGNORECASE):
-            matches["glossary"].append(g)
+        if not g:
+            continue
+        try:
+            if re.search(re.escape(g), text, flags=re.IGNORECASE):
+                matches["glossary"].append(g)
+        except re.error as e:
+            bad_patterns.append(g)
+            logger.warning(f"Invalid glossary token skipped: {g} ({e})")
+
     for pat in compliance_patterns or []:
+        if not pat:
+            continue
         try:
             if re.search(pat, text, flags=re.IGNORECASE):
                 matches["compliance"].append(pat)
-        except re.error:
-            logger.exception(
-                "Invalid regex pattern in compliance_patterns: %s", pat)
+        except re.error as e:
+            bad_patterns.append(pat)
+            logger.warning(f"Invalid regex pattern skipped: {pat} ({e})")
+
+    if bad_patterns:
+        logger.debug(f"Ignored invalid patterns: {bad_patterns}")
+
     return matches
+
+
+# ----------------- Update translation JSON -----------------
+async def update_translation_json(translation_obj, path: str, new_value: str):
+    """
+    Traverses translation JSON by path and updates only that string.
+    """
+    data = translation_obj.translated_text_json
+    if isinstance(data, str):
+        data = json.loads(data)
+
+    keys = path.split(".")
+    ref = data
+
+    try:
+        for k in keys[:-1]:
+            ref = ref[int(k)] if k.isdigit() else ref[k]
+
+        last_key = keys[-1]
+        ref[last_key] = new_value
+        logger.info(f"Updated JSON path: {path} → {new_value}")
+        return data
+
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        logger.error(f" Invalid JSON path `{path}`: {e}")
+        raise ValueError(f"Invalid JSON path: {path}") from e
 
 # ----------------- meaning-shift classifier -----------------
 
@@ -212,28 +258,24 @@ async def produce_suggestions(
     # parallel generation for speed
     tasks = []
     for seg in segments:
-        seg_id = seg["id"]
+        seg_path = seg["path"]
         text = seg["text"]
         cached = get_suggestions_from_cache(
             tenant_id, language_pair, domain, text)
         if cached:
+            logger.info(f"[cache-hit] {seg_path}")
             aggregated_suggestions.append({
-                "segment_id": seg_id,
+                "path": seg_path,
                 "original": text,
                 "suggestions": cached["suggestions"],
                 "scores": cached.get("scores", {})
             })
-            # update aggregate scores
-            sc = cached.get("scores", {})
-            for k in ("grammar", "fluency", "style"):
-                if k in sc:
-                    scores[k] += sc[k]
-                    score_counts[k] += 1
             continue
         # else schedule generation
-        tasks.append((seg_id, text))
+        tasks.append((seg_path, text))
 
-    async def _process_one(seg_id, text):
+    async def _process_one(path, text):
+        logger.info(f"[generate] Creating candidates for: {path}")
         candidates = await generate_candidate_suggestions(text, style_pack, n=4)
         final = []
         for c in candidates:
@@ -242,9 +284,9 @@ async def produce_suggestions(
             matches = find_forbidden_matches(
                 c["after"], glossary, compliance_patterns)
             if matches["glossary"]:
-                blocked_reasons.extend(["glossary"])
+                blocked_reasons.append("glossary")
             if matches["compliance"]:
-                blocked_reasons.extend(["compliance"])
+                blocked_reasons.append("compliance")
             # numbers / sku / urls detection
             if re.search(r"\b\d{2,}\b", c["after"]):
                 # numbers present — block if they differ from original numbers
@@ -287,18 +329,24 @@ async def produce_suggestions(
                 local_scores[k] = 0
 
         # cache per segment to avoid repeated LLM calls
-        payload = {"suggestions": final, "scores": local_scores,
-                   "generated_at": datetime.utcnow().isoformat()}
+        payload = {"suggestions": final,
+                   "scores": local_scores,
+                   "generated_at": datetime.utcnow().isoformat()
+                   }
         set_suggestions_in_cache(
             tenant_id, language_pair, domain, text, payload)
-        return {"segment_id": seg_id, "original": text, "suggestions": final, "scores": local_scores}
+        return {"path": path, "original": text, "suggestions": final, "scores": local_scores}
 
-    # spawn tasks
-    proc = [asyncio.create_task(_process_one(seg_id, text))
-            for seg_id, text in tasks]
-    if proc:
-        done = await asyncio.gather(*proc, return_exceptions=False)
-        aggregated_suggestions.extend(done)
+    # # spawn tasks
+    # proc = [asyncio.create_task(_process_one(seg_id, text))
+    #         for seg_id, text in tasks]
+    # if proc:
+    #     done = await asyncio.gather(*proc, return_exceptions=False)
+    #     aggregated_suggestions.extend(done)
+
+    if tasks:
+        results = await asyncio.gather(*[asyncio.create_task(_process_one(path, text)) for path, text in tasks])
+        aggregated_suggestions.extend(results)
 
     # overall aggregated scores average
     overall_scores = {}
@@ -307,5 +355,8 @@ async def produce_suggestions(
             overall_scores[k] = int((scores[k] / score_counts[k]))
         else:
             overall_scores[k] = 0
+    logger.info(
+        f"[{tenant_id}] Processed {len(aggregated_suggestions)} segments total")
+    logger.info(f"Scores summary: {overall_scores}")
 
     return {"suggestions": aggregated_suggestions, "scores": overall_scores}

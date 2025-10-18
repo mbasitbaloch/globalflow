@@ -119,6 +119,7 @@ def store_data(translated_data, req, raw_data, postgres_id):
             id=str(uuid.uuid4()),
             vector=embedding,
             payload={
+                "type": "translation_data",
                 "shopDomain": req["shopDomain"],
                 "user_id": str(user["_id"]) if user else None,
                 "targetLanguage": req["targetLanguage"],

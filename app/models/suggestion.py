@@ -11,7 +11,8 @@ class Suggestion(Base):
     doc_type = Column(String(64), nullable=False)
     domain = Column(String(64), nullable=False)
     language_pair = Column(String(32), nullable=False)
-    segment_id = Column(String(128), nullable=False, index=True)
+    translation_id = Column(Integer, nullable=True)
+    path = Column(String, nullable=True)
     original_text = Column(Text, nullable=False)
     suggestions = Column(JSON, nullable=False)  # list of suggestion objects
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -25,7 +26,8 @@ class SuggestionAudit(Base):
     suggestion_id = Column(Integer, nullable=True)
     tenant_id = Column(String(128), nullable=False)
     user_id = Column(String(128), nullable=True)
-    segment_id = Column(String(128), nullable=False)
+    translation_id = Column(Integer, nullable=True)
+    path = Column(String, nullable=True)
     suggestion_hash = Column(String(128), nullable=True)
     # "accept" | "reject" | "apply_all"
     action = Column(String(16), nullable=False)
