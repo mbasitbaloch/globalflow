@@ -184,7 +184,7 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         return {
             "message": "Translation served from cache (data unchanged)",
             "file_path": file_path,
-            # "translation_id": translation_record.id,
+            "translation_id": translation_record.id,
             "translation": cached_translated
         }
 
