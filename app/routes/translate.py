@@ -159,27 +159,27 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
             json.dump(raw_data, f, ensure_ascii=False, indent=2)
 
         # Save to PostgreSQL
-        # translation_record = Translation(
-        #     user_id=user_id,
-        #     industry=industry,
-        #     shop_domain=shop_domain,
-        #     brand_tone=brand_tone,
-        #     target_lang=target_lang,
-        #     content_type="json",
-        #     original_text_raw=json.dumps(raw_data, ensure_ascii=False),
-        #     original_text_json=raw_data,
-        #     translated_text_raw=json.dumps(
-        #         cached_translated, ensure_ascii=False),
-        #     translated_text_json=cached_translated
-        # )
-        # db.add(translation_record)
-        # db.commit()
-        # db.refresh(translation_record)
+        translation_record = Translation(
+            user_id=user_id,
+            industry=industry,
+            shop_domain=shop_domain,
+            brand_tone=brand_tone,
+            target_lang=target_lang,
+            content_type="json",
+            original_text_raw=json.dumps(raw_data, ensure_ascii=False),
+            original_text_json=raw_data,
+            translated_text_raw=json.dumps(
+                cached_translated, ensure_ascii=False),
+            translated_text_json=cached_translated
+        )
+        db.add(translation_record)
+        db.commit()
+        db.refresh(translation_record)
 
-        # print("Celery task started...")
-        # task = store_data.delay(cached_translated, req,
-        #                         raw_data, translation_record.id)
-        # print(f"New task ID: {task.id}")
+        print("Celery task started...")
+        task = store_data.delay(cached_translated, req,
+                                raw_data, translation_record.id)
+        print(f"New task ID: {task.id}")
 
         return {
             "message": "Translation served from cache (data unchanged)",
