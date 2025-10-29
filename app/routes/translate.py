@@ -83,18 +83,20 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
       "shopDomain": "...",
       "accessToken": "...",
       "targetLanguage": "fr",
+      "targetcountry":"FR",
       "brandTone": "neutral"
     }
     """
     # Validate request
     required_fields = ["shopDomain", "accessToken",
-                       "targetLanguage", "brandTone"]
+                       "targetLanguage", "brandTone", "targetcountry"]
     if not all(k in req for k in required_fields):
         raise HTTPException(status_code=400, detail="Missing required fields")
 
     # Get user from MongoDB
     shop_domain = req["shopDomain"]
-    target_lang = req["targetLanguage"]
+    targetLanguage = req["targetLanguage"]
+    targetCountry = req["targetcountry"]
     brand_tone = req["brandTone"]
 
     user = users_collection.find_one({"shopifyStores.shopDomain": shop_domain})
@@ -104,7 +106,7 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
     user_id = str(user["_id"])
 
     # Check extracted data cache
-    cache_key = f"shopify_data:{shop_domain}:{target_lang}"
+    cache_key = f"shopify_data:{shop_domain}:{targetLanguage}:{targetCountry}"
     cached_data = get_cached_extracted_data(cache_key)
     raw_data = None
 
@@ -114,8 +116,9 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         response = requests.post(url, json={
             "shopDomain": shop_domain,
             "accessToken": req["accessToken"],
-            "targetLanguage": target_lang,
-            "brandTone": brand_tone
+            "targetLanguage": targetLanguage,
+            "brandTone": brand_tone,
+            "targetcountry": targetCountry
         })
         response.raise_for_status()
         fresh_data = response.json()
@@ -123,21 +126,24 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         cached_hash = compute_raw_hash(cached_data)
 
         if fresh_hash == cached_hash:
-            print(f"Extracted data cache hit for {shop_domain}:{target_lang}")
+            print(
+                f"Extracted data cache hit for {shop_domain}:{targetLanguage}:{targetCountry}")
             raw_data = cached_data
         else:
             print(
                 f"Extracted data cache miss (hash mismatch: {cached_hash[:8]} != {fresh_hash[:8]})")
             raw_data = fresh_data
     else:
-        print(f"No cached extracted data for {shop_domain}:{target_lang}")
+        print(
+            f"No cached extracted data for {shop_domain}:{targetLanguage}:{targetCountry}")
         # Fetch fresh data from Shopify
         url = "https://stagingapi.globalflow.ai/api/shopify/unauth/get-all-store-data"
         response = requests.post(url, json={
             "shopDomain": shop_domain,
             "accessToken": req["accessToken"],
-            "targetLanguage": target_lang,
-            "brandTone": brand_tone
+            "targetLanguage": targetLanguage,
+            "brandTone": brand_tone,
+            "targetcountry": targetCountry
         })
         response.raise_for_status()
         raw_data = response.json()
@@ -148,7 +154,7 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
     # Check full translation cache
     fresh_hash = compute_raw_hash(raw_data)
     cached_translated = get_full_translation_from_cache(
-        shop_domain, target_lang, brand_tone, fresh_hash)
+        shop_domain, targetLanguage, brand_tone, fresh_hash, targetCountry)
     if cached_translated:
         print(f"Translation served from cache for {shop_domain} (hash match)")
         # Save original JSON
@@ -164,7 +170,8 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
             industry=industry,
             shop_domain=shop_domain,
             brand_tone=brand_tone,
-            target_lang=target_lang,
+            target_lang=targetLanguage,
+            targetCountry=targetCountry,
             content_type="json",
             original_text_raw=json.dumps(raw_data, ensure_ascii=False),
             original_text_json=raw_data,
@@ -193,14 +200,15 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         raw_data,
         user_id=user_id,
         shopDomain=shop_domain,
-        target_lang=target_lang,
+        target_lang=targetLanguage,
+        targetCountry=targetCountry,
         brand_tone=brand_tone,
         industry=industry
     )
 
     # Cache the full translated JSON
     set_full_translation_in_cache(
-        shop_domain, target_lang, brand_tone, translated_data, fresh_hash)
+        shop_domain, targetLanguage, brand_tone, translated_data, fresh_hash, targetCountry)
 
     # Save original JSON to file
     file_name = f"Today_fetched_{uuid.uuid4().hex}.json"
@@ -224,7 +232,8 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         industry=industry,
         shop_domain=shop_domain,
         brand_tone=brand_tone,
-        target_lang=target_lang,
+        target_lang=targetLanguage,
+        targetCountry=targetCountry,
         content_type="json",
         original_text_raw=json.dumps(raw_data, ensure_ascii=False),
         original_text_json=raw_data,
@@ -258,13 +267,14 @@ async def update_translated_string(req: dict, db: Session = Depends(get_db)):
     try:
         # --- Validate request ---
         required = ["translation_id", "shopDomain",
-                    "targetLanguage", "path", "newValue"]
+                    "targetLanguage", "path", "newValue", "targetcountry"]
         if not all(k in req for k in required):
             return {"status": "error", "message": "Missing required fields"}
 
         translation_id = req["translation_id"]
         shop_domain = req["shopDomain"]
-        lang = req["targetLanguage"]
+        targetLanguage = req["targetLanguage"]
+        targetCountry = req["targetcountry"]
         path = req["path"]
         new_value = req["newValue"]
         original_value = req.get("originalValue", "")
@@ -292,8 +302,15 @@ async def update_translated_string(req: dict, db: Session = Depends(get_db)):
                     {
                         "role": "system",
                         "content": (
-                            "You are an AI evaluator that rates text updates for quality and relevance. "
-                            "Return JSON with 'rating' (0-1) and 'reason'."
+                            f"You are an AI evaluator responsible for rating text updates based on their quality, meaning, and contextual relevance. "
+                                f"Only approve updates that are meaningful, relevant, and linguistically appropriate to the user's target language and region. "
+                                f"Evaluate the text using the natural tone, expressions, and writing style used in the specified country for that language. "
+                                f"For example, if the language is English and the country is the United Kingdom, prefer 'colour' over 'color', and if the country is the United States, prefer 'color' over 'colour'. "
+                                f"Apply equivalent tone and spelling distinctions for other languages and regions. "
+                                f"Be strict — reject updates that are incorrect, unnatural, off-tone, or contextually irrelevant. "
+                                f"Target Language: {targetLanguage} | Target Country/Region: {targetCountry}. "
+                                f"Return your response strictly in JSON format with the following structure: "
+                                "{ 'rating': <float between 0 and 1>, 'reason': '<clear explanation of your decision>' }."
                         ),
                     },
                     {
@@ -337,7 +354,7 @@ async def update_translated_string(req: dict, db: Session = Depends(get_db)):
         if not translation:
             return {"status": "error", "message": "Translation not found"}
 
-        if translation.shop_domain != shop_domain or translation.target_lang != lang:
+        if translation.shop_domain != shop_domain or translation.target_lang != targetLanguage:
             return {"status": "error", "message": "Shop or language mismatch"}
 
         # --- Apply JSON update ---
@@ -382,10 +399,12 @@ async def update_translated_string(req: dict, db: Session = Depends(get_db)):
 
         # --- Invalidate caches ---
         try:
-            invalidate_full_translation_cache(shop_domain, lang)
-            invalidate_extracted_data_cache(shop_domain, lang)
+            invalidate_full_translation_cache(
+                shop_domain, targetLanguage, targetCountry)
+            invalidate_extracted_data_cache(
+                shop_domain, targetLanguage, targetCountry)
             print(
-                f"Caches invalidated for shopDomain: {shop_domain}, targetLanguage: {lang}")
+                f"Caches invalidated for shopDomain: {shop_domain}, targetLanguage: {targetLanguage}:{targetCountry}")
         except Exception as e:
             print(f"Cache invalidation failed: {e}")
 
@@ -406,7 +425,8 @@ async def update_translated_string(req: dict, db: Session = Depends(get_db)):
                     "industry": (user or {}).get("industry") or "Unknown",
                     "postgres_id": translation.id,
                     "shopDomain": shop_domain,
-                    "targetLanguage": lang,
+                    "targetLanguage": targetLanguage,
+                    "targetCountry": targetCountry,
                     "path": path,
                     "newValue": new_value,
                     "originalValue": original_value,
@@ -434,6 +454,7 @@ async def update_translated_string(req: dict, db: Session = Depends(get_db)):
             "newValue": new_value,
             "shopDomain": translation.shop_domain,
             "targetLanguage": translation.target_lang,
+            "targetCountry": translation.targetcountry,
             "ai_rating": ai_rating,
             "ai_reason": ai_reason,
             "updatedJson": translation.translated_text_json,

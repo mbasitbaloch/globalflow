@@ -170,15 +170,37 @@ async def meaning_shift_risk(original: str, candidate: str, doc_type: str) -> Tu
 # ----------------- generate suggestions using constrained LLM prompt -----------------
 
 
-async def generate_candidate_suggestions(segment_text: str, style_pack: dict, n: int = 3) -> List[Dict[str, Any]]:
+async def generate_candidate_suggestions(segment_text: str,
+                                         style_pack: dict,
+                                         language_pair: str,
+                                         target_country: str,
+                                         n: int = 3
+                                         ) -> List[Dict[str, Any]]:
     """
     Returns a list of candidate suggestions (type, after, rationale, confidence).
-    This function can call either OpenAI or Gemini. We constrain prompts to avoid hallucinations.
+    Adds localization awareness based on target_language and target_country.
     """
     # We will ask the model to produce a JSON array of suggestion objects,
     # each with type ∈ {grammar,fluency,style,idiom}, after, rationale, confidence (0..1).
     prompt = f"""
-You are a constrained editor. Given the source text, propose up to {n} non-factual-edit suggestions (grammar, fluency, style, idiom).
+You are a constrained text editor and linguistic expert.
+
+Task:
+Propose up to {n} non-factual-edit suggestions (grammar, fluency, style, idiom) for the given text.
+
+
+Localization Rule:
+- The text is written in **{language_pair}** as used in **{target_country}**.
+- Make sure all suggestions align with how this language is naturally written and spoken in that country.
+- Adjust spelling, idioms, tone, and phrasing to match the country's local variant.
+  Examples:
+  - English (United States): "color", "customization"
+  - English (United Kingdom): "colour", "customisation"
+  - French (France) vs French (Canada): adapt expressions and tone accordingly
+  - Arabic (Egypt) vs Arabic (Saudi Arabia): use local vocabulary
+- Keep the meaning unchanged; only improve fluency or localization accuracy.
+
+
 Rules:
 - Do NOT invent new facts or numbers.
 - Keep glossary terms stable.
@@ -276,7 +298,14 @@ async def produce_suggestions(
 
     async def _process_one(path, text):
         logger.info(f"[generate] Creating candidates for: {path}")
-        candidates = await generate_candidate_suggestions(text, style_pack, n=4)
+        # candidates = await generate_candidate_suggestions(text, style_pack, n=4)
+        candidates = await generate_candidate_suggestions(
+            segment_text=text,
+            style_pack=style_pack,
+            language_pair=language_pair,
+            target_country=country,
+            n=4
+        )
         final = []
         for c in candidates:
             # blocked checks

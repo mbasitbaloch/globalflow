@@ -59,7 +59,8 @@ async def suggestions_generate(req: GenerateRequest, db: Session = Depends(get_d
     if not req.segments or len(req.segments) == 0:
         raise HTTPException(status_code=400, detail="segments required")
 
-    logger.info(f"[generate] Tenant={req.tenant_id} Domain={req.domain}")
+    logger.info(
+        f"[generate] Tenant={req.tenant_id} Domain={req.domain} language_pair={req.language_pair} country={req.country}")
     logger.info("[generate] Loading style pack and checking cache...")
 
     # call engine

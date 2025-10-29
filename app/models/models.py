@@ -13,6 +13,7 @@ class Translation(Base):
     shop_domain = Column(String)
     brand_tone = Column(String)
     target_lang = Column(String)
+    targetCountry = Column(String)
     content_type = Column(String)
 
     # Hybrid fields

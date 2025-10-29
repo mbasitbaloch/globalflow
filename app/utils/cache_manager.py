@@ -34,15 +34,15 @@ def _make_cache_key(shop_domain: str, target_lang: str, brand_tone: str, text: s
 # UPDATED: Helper for per-string keys (now supports global reuse)
 
 
-def _make_cache_key_flex(target_lang: str, brand_tone: str, text: str, include_domain: bool = False, shop_domain: str = "") -> str:
-    raw = f"{shop_domain}:{target_lang}:{brand_tone}:{text.strip().lower()}" if include_domain else f"{target_lang}:{brand_tone}:{text.strip().lower()}"
+def _make_cache_key_flex(target_lang: str, brand_tone: str, text: str, targetCountry: str, include_domain: bool = False, shop_domain: str = "") -> str:
+    raw = f"{shop_domain}:{target_lang}:{targetCountry}:{brand_tone}:{text.strip().lower()}" if include_domain else f"{target_lang}:{targetCountry}:{brand_tone}:{text.strip().lower()}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 # NEW: Helper for full JSON keys (simple, non-hashed for readability)
 
 
-def _make_full_cache_key(shop_domain: str, target_lang: str, brand_tone: str, prefix: str = "translate") -> str:
-    return f"globalflow:{prefix}:{shop_domain}:{target_lang}:{brand_tone}"
+def _make_full_cache_key(shop_domain: str, target_lang: str, brand_tone: str, targetCountry: str, prefix: str = "translate") -> str:
+    return f"globalflow:{prefix}:{shop_domain}:{target_lang}:{brand_tone}:{targetCountry}"
 
 # Existing per-string functions (updated to use flex key for global option)
 
@@ -88,20 +88,21 @@ def compute_raw_hash(raw_data: dict) -> str:
 # NEW: Full JSON Caching Functions (hash-aware)
 
 
-def get_full_translation_from_cache(shop_domain: str, target_lang: str, brand_tone: str, current_raw_hash: str) -> dict | None:
+def get_full_translation_from_cache(shop_domain: str, target_lang: str, brand_tone: str, current_raw_hash: str, targetCountry: str) -> dict | None:
     """
     Load full translated JSON if raw_hash matches. Returns deep copy.
     """
     if not redis_client:
         return None
-    key = _make_full_cache_key(shop_domain, target_lang, brand_tone)
+    key = _make_full_cache_key(
+        shop_domain, target_lang, brand_tone, targetCountry)
     cached_value = redis_client.get(key)
     if cached_value:
         try:
             cache_data = json.loads(cached_value)  # type: ignore
             if cache_data.get("raw_hash") == current_raw_hash:
                 print(
-                    f"Full JSON cache HIT (hash match) for {shop_domain}:{target_lang}:{brand_tone}")
+                    f"Full JSON cache HIT (hash match) for {shop_domain}:{target_lang}:{brand_tone}:{targetCountry}")
                 file_name = f"Today_translated_{uuid.uuid4().hex}.json"
                 file_path = os.path.join("tmp", file_name)
                 os.makedirs("tmp", exist_ok=True)
@@ -120,13 +121,14 @@ def get_full_translation_from_cache(shop_domain: str, target_lang: str, brand_to
     return None
 
 
-def set_full_translation_in_cache(shop_domain: str, target_lang: str, brand_tone: str, translated_data: dict, raw_hash: str, ttl: int = 2592000):  # 1h TTL
+def set_full_translation_in_cache(shop_domain: str, target_lang: str, brand_tone: str, translated_data: dict, targetCountry: str, raw_hash: str, ttl: int = 2592000, ):  # 1h TTL
     """
     Store full translated JSON + raw_hash with TTL.
     """
     if not redis_client:
         return
-    key = _make_full_cache_key(shop_domain, target_lang, brand_tone)
+    key = _make_full_cache_key(
+        shop_domain, target_lang, brand_tone, targetCountry)
     cache_obj = {
         "translated": translated_data,
         "raw_hash": raw_hash
@@ -134,22 +136,24 @@ def set_full_translation_in_cache(shop_domain: str, target_lang: str, brand_tone
     serialized = json.dumps(cache_obj, ensure_ascii=False)
     redis_client.setex(key, ttl, serialized)
     print(
-        f"Full JSON cached (with hash {raw_hash[:8]}...) for {shop_domain}:{target_lang}:{brand_tone} (TTL: {ttl}s)")
+        f"Full JSON cached (with hash {raw_hash[:8]}...) for {shop_domain}:{target_lang}:{targetCountry}:{brand_tone}(TTL: {ttl}s)")
 
 
-def invalidate_full_translation_cache(shop_domain: str, target_lang: str, brand_tone: str):
+def invalidate_full_translation_cache(shop_domain: str, target_lang: str, brand_tone: str, targetCountry: str):
     """
     Invalidate full JSON cache (e.g., after updates).
     """
     if not redis_client:
         return
-    key = _make_full_cache_key(shop_domain, target_lang, brand_tone)
+    key = _make_full_cache_key(
+        shop_domain, target_lang, brand_tone, targetCountry)
     deleted = redis_client.delete(key)
     if deleted:
         print(
             f"Full JSON cache INVALIDATED for {shop_domain}:{target_lang}:{brand_tone}")
     # Optional: Invalidate raw fetch too (though we're not caching raw)
-    raw_key = _make_full_cache_key(shop_domain, target_lang, brand_tone, "raw")
+    raw_key = _make_full_cache_key(
+        shop_domain, target_lang, brand_tone, "raw", targetCountry)
     redis_client.delete(raw_key)
 
 
@@ -166,32 +170,33 @@ def cache_extracted_data(cache_key: str, data: list):
     redis_client.setex(cache_key, 60*60*24*30, json.dumps(data))
 
 
-def invalidate_extracted_data_cache(shop_domain: str, target_lang: str):
+def invalidate_extracted_data_cache(shop_domain: str, target_lang: str, targetCountry: str):
     """
     Invalidate the extracted data cache for a specific shopDomain and targetLanguage.
     """
     if not redis_client:
         return
-    cache_key = f"shopify_data:{shop_domain}:{target_lang}"
+    cache_key = f"shopify_data:{shop_domain}:{target_lang}:{targetCountry}"
     redis_client.delete(cache_key)
-    print(f"Extracted data cache INVALIDATED for {shop_domain}:{target_lang}")
+    print(
+        f"Extracted data cache INVALIDATED for {shop_domain}:{target_lang}:{targetCountry}")
 
 
 # By Mr Hassan
-def get_cached_string(target_lang, brand_tone, string):
+def get_cached_string(target_lang, brand_tone, string, targetCountry):
     if not redis_client:
         return None
     flex_key = _make_cache_key_flex(
-        target_lang, brand_tone, string, include_domain=False)
+        target_lang, brand_tone, string, targetCountry, include_domain=False)
     cached = redis_client.get(f"string:{flex_key}")
     return json.loads(cached) if cached else None
 
 
-def set_cached_string(target_lang, brand_tone, string, processed):
+def set_cached_string(target_lang, brand_tone, string, processed, targetCountry):
     if not redis_client:
         return
     flex_key = _make_cache_key_flex(
-        target_lang, brand_tone, string, include_domain=False)
+        target_lang, brand_tone, string, targetCountry, include_domain=False)
     redis_client.setex(
         f"string:{flex_key}", 60*60*24*30, json.dumps(processed))
 
