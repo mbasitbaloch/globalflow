@@ -612,14 +612,23 @@ async def fewshotTranslation(examples, model, query, SafeJsonParser):
 
 
         ### Country & Localization Rule
-        - Always adapt translations to the **regional variant** of {targetLanguage} spoken in **{targetCountry}**.  
-        - Adjust tone, spelling, idioms, and vocabulary to match that country’s natural usage.  
-          Examples:
-          - English (United States) → "color", "customization"
-          - English (United Kingdom) → "colour", "customisation"
-          - French (France) vs French (Canada) → adapt expressions and tone accordingly
-          - Arabic (Egypt) vs Arabic (Saudi Arabia) → use locally natural forms
-        - If the country’s language has multiple local varieties, choose the most **commonly used** written form for {targetCountry}.
+        Always adapt translations to the **regional variant** of {targetLanguage} used in **{targetCountry}**. Use the natural tone, vocabulary, and phrasing typical for that region.
+        - Adjust tone, spelling, vocabulary, and idioms to sound natural in that region.
+        - Follow these examples for guidance:
+            - English (US): "color", "customize" — friendly, direct tone.
+            - English (UK): "colour", "customise" — formal, polite tone.
+            - English (India): mix of British spelling + Indian idioms.
+            - French (France): standard European French expressions.
+            - French (Canada): Québécois tone and local phrasing.
+            - Arabic (Egypt): colloquial Egyptian Arabic (العامية المصرية) for general content.
+            - Arabic (Saudi Arabia): Gulf Arabic tone (الفصحى الخليجية) for general content.
+            - Urdu (Pakistan): Pakistani-style expressions, Arabic loanwords preferred.
+            - Urdu (India): Indian Urdu with Hindi-influenced vocabulary.
+            - Spanish (Spain): Castilian tone ("vosotros").
+            - Spanish (Mexico): Latin American tone ("ustedes").
+            - If the country’s language has multiple local varieties, choose the most **commonly used** written form for {targetCountry}.
+        If unsure, choose the most natural and commonly used phrasing for that country.
+
 
         ### Style & Consistency
         - Maintain the brand tone as **'{brandTone}'**.
@@ -654,13 +663,6 @@ async def fewshotTranslation(examples, model, query, SafeJsonParser):
         input_variables=["input", "targetLanguage", "targetCountry",
                          "brandTone", "industry", "num_strings"],
     )
-    for a in range(3):
-        if a == 1:
-            print(f"few shot template for translation is: {fewshot_prompt}")
-            break
-
-    # print(f"Fewshot prompt template is created!\n{fewshot_prompt}")
-    # print("Fewshot prompt is created!")
 
     # print("Expected variables:", fewshot_prompt.input_variables)
 
@@ -668,6 +670,16 @@ async def fewshotTranslation(examples, model, query, SafeJsonParser):
 
     # print("Chain is created!")
     input_text = query.input
+
+    # formatted_prompt = fewshot_prompt.format(
+    #     input=json.dumps(query.input, ensure_ascii=False),
+    #     targetLanguage=query.targetLanguage,
+    #     targetCountry=query.targetCountry,
+    #     brandTone=query.brandTone,
+    #     industry=query.industry,
+    #     num_strings=len(query.input),
+    # )
+    # print(" Final Prompt Sent to Model:\n", formatted_prompt)
 
     response = await chain.ainvoke({
         "input": json.dumps(input_text, ensure_ascii=False),
@@ -677,8 +689,6 @@ async def fewshotTranslation(examples, model, query, SafeJsonParser):
         "industry": query.industry,
         "num_strings": len(input_text),
     })
-
-    # print("Response is created!")
 
     return response
 
