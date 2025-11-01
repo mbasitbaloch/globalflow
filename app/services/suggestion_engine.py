@@ -304,7 +304,7 @@ async def produce_suggestions(
             style_pack=style_pack,
             language_pair=language_pair,
             target_country=country,
-            n=4
+            n=5
         )
         final = []
         for c in candidates:

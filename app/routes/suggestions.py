@@ -104,6 +104,7 @@ async def suggestions_apply(req: ApplyRequest, db: Session = Depends(get_db)):
     """
     logger.info(
         f"[apply] Applying suggestion {req.suggestion_id} | Action={req.action}")
+    print(f"action is {req.action}")
 
     if req.action not in ("accept", "reject"):
         raise HTTPException(status_code=400, detail="invalid action")
@@ -123,6 +124,7 @@ async def suggestions_apply(req: ApplyRequest, db: Session = Depends(get_db)):
     )
     db.add(audit)
     logger.info("[apply] Audit record added.")
+    print("[apply] Audit record added.")
 
     if req.action == "accept":
         try:
@@ -151,8 +153,17 @@ async def suggestions_apply(req: ApplyRequest, db: Session = Depends(get_db)):
                 status_code=500, detail=f"Failed to update translation: {e}")
 
     db.commit()
-    logger.info("[apply] Action recorded successfully.")
-    return {"status": "ok", "message": "Changes are applied and action recorded"}
+    if req.action == "reject":
+        logger.info(
+            "[apply] Suggestion rejected, no translation update needed.")
+        print("[apply] Suggestion rejected, no translation update needed.")
+        print(f"[apply] Action recorded successfully for action: {req.action}")
+        return {"status": "Rejected", "message": "No changes applied, action recorded in audit log"}
+    else:
+        logger.info(
+            f"[apply] Action recorded successfully for action: {req.action}")
+        print(f"[apply] Action recorded successfully for action: {req.action}")
+        return {"status": "Success", "message": "Changes are applied and action recorded in audit log"}
 
 
 @router.get("/style-pack")
