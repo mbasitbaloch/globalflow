@@ -9,7 +9,7 @@ class Settings:
     QDRANT_URL: str = os.getenv("QDRANT_URL", "")
     QDRANT_API_KEY: str = os.getenv("QDRANT_API_KEY", "")
     COLLECTION_NAME: str = os.getenv("COLLECTION_NAME", "")
-    GEMINI_API_KEY_1: str = os.getenv("GEMINI_API_KEY_1", "")
+    GEMINI_API_KEY_1: str = os.getenv("GEMINI_API_KEY_1")
     GEMINI_API_KEY_2: str = os.getenv("GEMINI_API_KEY_2", "")
     OPENAI_API_KEY_1: str = os.getenv("OPENAI_API_KEY_1", "")
     OPENAI_API_KEY_2: str = os.getenv("OPENAI_API_KEY_2", "")
