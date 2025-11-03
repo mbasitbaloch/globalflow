@@ -38,6 +38,7 @@ from ..utils.cache_manager import (
     get_cached_extracted_data, cache_extracted_data,
     invalidate_extracted_data_cache
 )
+import re
 
 COLLECTION_NAME = settings.COLLECTION_NAME
 
@@ -90,8 +91,28 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
     # Validate request
     required_fields = ["shopDomain", "accessToken",
                        "targetLanguage", "brandTone", "targetcountry"]
-    if not all(k in req for k in required_fields):
-        raise HTTPException(status_code=400, detail="Missing required fields")
+
+    # Check all required fields exist
+    missing = [f for f in required_fields if f not in req]
+    if missing:
+        raise HTTPException(
+            status_code=400, detail=f"Missing required fields: {', '.join(missing)}")
+
+    # Check none are empty or null
+    empty_fields = [f for f in required_fields if not str(req[f]).strip()]
+    if empty_fields:
+        raise HTTPException(
+            status_code=400, detail=f"Empty values found in: {', '.join(empty_fields)}, please enter an entry for {', '.join(empty_fields)}")
+
+    # Validate shop domain properly
+    shop_domain = req["shopDomain"].strip()
+    domain_pattern = re.compile(
+        # e.g., something.com or abc.myshopify.com
+        r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$"
+    )
+    if not domain_pattern.match(shop_domain):
+        raise HTTPException(
+            status_code=400, detail="Invalid shop domain format. Please enter a valid domain like 'example.myshopify.com'.")
 
     # Get user from MongoDB
     shop_domain = req["shopDomain"]
