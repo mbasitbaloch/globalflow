@@ -312,6 +312,55 @@ async def update_translated_string(req: UpdateRequest, db: Session = Depends(get
         transAccept = req.transAccept
         transEdit = req.transEdit
 
+        # --- Fetch translation record ---
+        translation = db.query(Translation).filter_by(
+            id=translation_id).first()
+        if not translation:
+            return {"status": "error", "message": "Translation not found"}
+
+        # if translation.shop_domain != shop_domain or translation.target_lang != targetLanguage:
+        #     return {"status": "error", "message": "Shop or language mismatch"}
+
+            # --- Verify domain, language, and country consistency ---
+        if translation.shop_domain != shop_domain:
+            return {
+                "status": "error",
+                "message": (
+                    f"Shop domain mismatch: Request domain '{shop_domain}' "
+                    f"does not match stored domain '{translation.shop_domain}'."
+                )
+            }
+
+        # If request targetLanguage doesn’t match stored target_lang
+        if translation.target_lang != targetLanguage:
+            return {
+                "status": "error",
+                "message": (
+                    f"Target language mismatch: The translation record was created for "
+                    f"'{translation.target_lang}', but you are trying to update using '{targetLanguage}'. "
+                    "Please use the same language as the existing translation."
+                )
+            }
+
+        # Handle country logic smartly:
+        if translation.targetCountry:
+            # If record already has a country, enforce consistency
+            if translation.targetCountry.lower() != targetCountry.lower():
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Target country mismatch: Existing translation country is '{translation.targetCountry}', "
+                        f"but you tried to update using '{targetCountry}'."
+                    )
+                }
+        else:
+            # If DB has no country, safely assign it
+            translation.targetCountry = targetCountry
+            # db.add(translation)
+            # db.commit()
+            print(
+                f"Target country '{targetCountry}' saved for translation {translation.id}.")
+
         # --- Get user ---
         user = users_collection.find_one(
             {"shopifyStores.shopDomain": shop_domain})
@@ -382,13 +431,13 @@ async def update_translated_string(req: UpdateRequest, db: Session = Depends(get
         print(f"AI approved (rating={ai_rating:.2f})")
 
         # --- Fetch translation record ---
-        translation = db.query(Translation).filter_by(
-            id=translation_id).first()
-        if not translation:
-            return {"status": "error", "message": "Translation not found"}
+        # translation = db.query(Translation).filter_by(
+        #     id=translation_id).first()
+        # if not translation:
+        #     return {"status": "error", "message": "Translation not found"}
 
-        if translation.shop_domain != shop_domain or translation.target_lang != targetLanguage:
-            return {"status": "error", "message": "Shop or language mismatch"}
+        # if translation.shop_domain != shop_domain or translation.target_lang != targetLanguage:
+        #     return {"status": "error", "message": "Shop or language mismatch"}
 
         # --- Apply JSON update ---
         data = translation.translated_text_raw
