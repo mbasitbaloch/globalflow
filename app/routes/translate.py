@@ -8,6 +8,7 @@ import requests
 from app.routes.ingest import get_db
 from ..database import SessionLocal
 from ..models.models import Translation
+from ..models.UpdateRequest import UpdateRequest
 from ..services.translator import fast_translate_json
 # from ..mongodb import users_collection
 # from fastapi.responses import JSONResponse, FileResponse
@@ -280,25 +281,36 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
 
 
 @router.put("/shopify/update-string")
-async def update_translated_string(req: dict, db: Session = Depends(get_db)):
+async def update_translated_string(req: UpdateRequest, db: Session = Depends(get_db)):
     """
     Safely updates a translation with AI validation & Qdrant embedding.
     Prevents crashes if AI or Qdrant fails.
     """
     try:
         # --- Validate request ---
-        required = ["translation_id", "shopDomain",
-                    "targetLanguage", "path", "newValue", "targetcountry"]
-        if not all(k in req for k in required):
-            return {"status": "error", "message": "Missing required fields"}
+        # required_fields = ["translation_id", "shopDomain",
+        #                    "targetLanguage", "path", "newValue", "targetcountry"]
+        # # if not all(k in req for k in required_fields):
+        # #     return {"status": "error", "message": "Missing required fields"}
 
-        translation_id = req["translation_id"]
-        shop_domain = req["shopDomain"]
-        targetLanguage = req["targetLanguage"]
-        targetCountry = req["targetcountry"]
-        path = req["path"]
-        new_value = req["newValue"]
-        original_value = req.get("originalValue", "")
+        # missing = [f for f in required_fields if f not in req or req[f] is None]
+        # if missing:
+        #     raise HTTPException(
+        #         status_code=400,
+        #         detail=f"Missing required field: {', '.join(missing)}"
+        #     )
+
+        translation_id = req.translation_id
+        shop_domain = req.shopDomain
+        targetLanguage = req.targetLanguage
+        targetCountry = req.targetcountry
+        path = req.path
+        new_value = req.newValue
+        original_value = req.originalValue or ""
+        expertEdit = req.expertEdit
+        customerEdit = req.customerEdit
+        transAccept = req.transAccept
+        transEdit = req.transEdit
 
         # --- Get user ---
         user = users_collection.find_one(
@@ -398,7 +410,7 @@ async def update_translated_string(req: dict, db: Session = Depends(get_db)):
         ai_flag_key = f"aiTranslated_{last_key}"
 
         # If expert edited, clear review + AI flags
-        if req.get("expertEdit"):
+        if req.expertEdit:
             if priority_key in ref:
                 ref[priority_key] = False  # type: ignore
             if ai_flag_key in ref:
@@ -408,10 +420,11 @@ async def update_translated_string(req: dict, db: Session = Depends(get_db)):
         translation.translated_text_raw = json.dumps(
             data, ensure_ascii=False)  # type: ignore
         translation.updated_at = datetime.now()  # type: ignore
-
-        for flag in ["expertEdit", "customerEdit", "transAccept", "transEdit"]:
-            if flag in req:
-                setattr(translation, flag.lower(), req[flag])
+        translation.targetCountry = targetCountry
+        translation.expert_edit = expertEdit
+        translation.customer_edit = customerEdit
+        translation.transAccept = transAccept
+        translation.transEdit = transEdit
 
         db.add(translation)
         db.commit()
@@ -421,7 +434,7 @@ async def update_translated_string(req: dict, db: Session = Depends(get_db)):
         # --- Invalidate caches ---
         try:
             invalidate_full_translation_cache(
-                shop_domain, targetLanguage, targetCountry)
+                shop_domain, targetLanguage, translation.brand_tone, targetCountry)
             invalidate_extracted_data_cache(
                 shop_domain, targetLanguage, targetCountry)
             print(
@@ -430,6 +443,7 @@ async def update_translated_string(req: dict, db: Session = Depends(get_db)):
             print(f"Cache invalidation failed: {e}")
 
         # --- Qdrant embedding (optional & safe) ---
+        # print(qdrant.get_collection(COLLECTION_NAME))
         try:
             response = client.embeddings.create(
                 model="text-embedding-3-small",
@@ -439,7 +453,7 @@ async def update_translated_string(req: dict, db: Session = Depends(get_db)):
             embedding = response.data[0].embedding
             correction_point = PointStruct(
                 id=str(uuid.uuid4()),
-                vector=embedding,
+                vector={"GlobalFlow": embedding},
                 payload={
                     "data_type": "correction",
                     "user_id": str(user["_id"]) if user else None,
@@ -475,7 +489,7 @@ async def update_translated_string(req: dict, db: Session = Depends(get_db)):
             "newValue": new_value,
             "shopDomain": translation.shop_domain,
             "targetLanguage": translation.target_lang,
-            "targetCountry": translation.targetcountry,
+            "targetCountry": translation.targetCountry,
             "ai_rating": ai_rating,
             "ai_reason": ai_reason,
             "updatedJson": translation.translated_text_json,

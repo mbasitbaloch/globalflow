@@ -186,7 +186,7 @@ async def generate_candidate_suggestions(segment_text: str,
 You are a constrained text editor and linguistic expert.
 
 Task:
-Propose up to {n} non-factual-edit suggestions (grammar, fluency, style, idiom) for the given text.
+Propose up to {n} non-factual-edit suggestions (grammar, fluency, style, and idiom) for the given text.
 
 
 Localization Rule:
@@ -211,6 +211,25 @@ Rules:
 Style pack (brief): {json.dumps(style_pack, ensure_ascii=False)}
 Source: {segment_text}
 """
+
+    # --- normalize suggestion types ---
+    required_types = ["grammar", "fluency", "style", "idioms"]
+
+    def safe_json_loads(s: str):
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError as e:
+            logger.warning(f"[JSONDecode] Primary decode failed: {e}")
+            # Try cleaning and retrying
+            s = re.sub(r",\s*([\]}])", r"\1", s)
+            s = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", s)
+            s = s.strip().strip("`")
+            try:
+                return json.loads(s)
+            except Exception as e2:
+                logger.error(f"[JSONDecode] Secondary decode failed: {e2}")
+                return []
+
     try:
         resp = await openai_async.chat.completions.create(
             model="gpt-4.1-mini",
@@ -221,19 +240,56 @@ Source: {segment_text}
         content = resp.choices[0].message.content.strip()
         if content.startswith("```"):
             content = re.sub(r"^```[a-zA-Z]*", "", content).strip("`").strip()
-        data = json.loads(content)
-        # Validate basic shape
-        out = []
-        for item in data:
-            if "type" in item and "after" in item:
-                out.append({
-                    "id": str(uuid.uuid4()),
-                    "type": item.get("type"),
-                    "after": item.get("after"),
-                    "rationale": item.get("rationale", ""),
-                    "confidence": float(item.get("confidence", 0.5))
+        # data = json.loads(content)
+
+        # parsed = safe_json_loads(content)
+        parsed = json.loads(content)
+        # Sometimes model gives dict with 'suggestions', sometimes plain list
+        data = parsed.get("suggestions") if isinstance(
+            parsed, dict) else parsed or []
+
+        # --- normalize suggestion types ---
+        normalized = []
+        seen_types = set()
+
+        for s in data:
+            stype = s.get("type", "").lower()
+            if stype in required_types and stype not in seen_types:
+                normalized.append(s)
+                seen_types.add(stype)
+
+            # # Skip duplicates
+            # if suggestion_type in seen_types:
+            #     continue
+
+            # # Add only allowed types
+            # if suggestion_type in required_types:
+            #     normalized_suggestions.append(s)
+            #     seen_types.add(suggestion_type)
+
+        # Add missing ones with fallback
+        # fill missing ones (fallbacks)
+        for t in required_types:
+            if t not in seen_types:
+                normalized.append({
+                    "suggestion_id": str(uuid.uuid4()),
+                    "type": t,
+                    "before": segment_text,
+                    "after": segment_text,
+                    "rationale": f"fallback — no {t} change",
+                    "confidence": 0.4,
+                    "blocked": True,
+                    "blocks": ["glossary", "compliance"],
+                    "risk": "low",
+                    "risk_confidence": 1.0
                 })
-        return out
+
+        # ensure order grammar→fluency→style→idioms
+        ordered = sorted(
+            normalized, key=lambda s: required_types.index(s["type"]))
+
+        return ordered
+
     except Exception as e:
         logger.exception("generate_candidate_suggestions failed: %s", e)
         # fallback heuristic: simple grammar swaps — minimal
@@ -282,17 +338,17 @@ async def produce_suggestions(
     for seg in segments:
         seg_path = seg["path"]
         text = seg["text"]
-        cached = get_suggestions_from_cache(
-            tenant_id, language_pair, domain, text)
-        if cached:
-            logger.info(f"[cache-hit] {seg_path}")
-            aggregated_suggestions.append({
-                "path": seg_path,
-                "original": text,
-                "suggestions": cached["suggestions"],
-                "scores": cached.get("scores", {})
-            })
-            continue
+        # cached = get_suggestions_from_cache(
+        #     tenant_id, language_pair, domain, text)
+        # if cached:
+        #     logger.info(f"[cache-hit] {seg_path}")
+        #     aggregated_suggestions.append({
+        #         "path": seg_path,
+        #         "original": text,
+        #         "suggestions": cached["suggestions"],
+        #         "scores": cached.get("scores", {})
+        #     })
+        #     continue
         # else schedule generation
         tasks.append((seg_path, text))
 

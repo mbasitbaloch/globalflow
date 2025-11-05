@@ -1,4 +1,5 @@
 from datetime import datetime
+import re
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional
@@ -7,6 +8,7 @@ from ..services.suggestion_engine import produce_suggestions, load_style_pack, u
 from ..database import SessionLocal
 from app.routes.ingest import get_db
 from ..models.suggestion import Suggestion, SuggestionAudit
+from ..models.suggestionRequest import GenerateRequest, ApplyRequest
 from ..models.models import Translation
 from sqlalchemy.orm import Session
 from ..utils.cache_manager import invalidate_suggestions_for_tenant
@@ -23,44 +25,89 @@ logger = logging.getLogger("suggestions_api")
 router = APIRouter(prefix="/suggestions", tags=["suggestions"])
 
 
-class Segment(BaseModel):
-    path: str
-    text: str
-
-
-class GenerateRequest(BaseModel):
-    tenant_id: str
-    translation_id: int
-    doc_type: str
-    domain: str
-    country: str
-    language_pair: str
-    preserve_legal_meaning: Optional[bool] = True
-    segments: List[Segment]
-    glossary: Optional[List[str]] = None
-    compliance_patterns: Optional[List[str]] = None
-
-
-class ApplyRequest(BaseModel):
-    tenant_id: str
-    translation_id: int
-    path: str
-    suggestion_id: str
-    user_id: Optional[str] = None
-    action: str  # "accept"|"reject"
-    before: Optional[str] = None
-    after: Optional[str] = None
-    metadata: Optional[dict] = None
-
-
 @router.post("/generate")
 async def suggestions_generate(req: GenerateRequest, db: Session = Depends(get_db)):
-    # validate segments
-    if not req.segments or len(req.segments) == 0:
-        raise HTTPException(status_code=400, detail="segments required")
+    """
+    Expect body:
+    {
+    "tenant_id": "68cabc6b4eddddad0891642b",
+    "translation_id":40,
+    "doc_type": "Legal",
+    "domain": "globalflow-ai-esp.myshopify.com",
+    "country": "CA-CA", 
+    "language_pair": "en-fr",
+    "preserve_legal_meaning": true,
+    "segments": [
+        { "path": "fullData.storeData.products.0.title", "text": "Ventilateur portable sans pales à suspendre au cou – Rechargeable, silencieux et mains libres pour l'été" } //france french
+    ],
+    "glossary": ["portable", "Rechargeable"],
+    "compliance_patterns": ["sans pales à suspendre"]
+    }
+    """
+   # 1 Validate all required fields exist and are non-empty
+    required_fields = [
+        "tenant_id", "translation_id", "doc_type",
+        "domain", "country", "language_pair",
+        "preserve_legal_meaning", "segments"
+    ]
 
+    missing = [f for f in required_fields if getattr(req, f, None) is None]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing required field: {', '.join(missing)}"
+        )
+
+    empty_fields = [f for f in required_fields if not str(
+        getattr(req, f)).strip()]
+    if empty_fields:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Field cannot be empty: {', '.join(empty_fields)}"
+        )
+
+    # 2 Validate domain format (must end with a valid TLD)
+    shop_domain = req.domain.strip().lower()
+    domain_pattern = re.compile(
+        # ensures .com, .ca, .org, etc.
+        r"^(?!-)([A-Za-z0-9-]+\.)+[A-Za-z]{2,}$"
+    )
+    if not domain_pattern.match(shop_domain):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid domain format. Please provide a valid domain like 'example.myshopify.com' or 'example.ca'."
+        )
+
+    # 3 Validate language pair (e.g., en-fr, fr-en)
+    lang_pair = req.language_pair.strip().lower()
+    if not re.match(r"^[a-z]{2}-[a-z]{2}$", lang_pair):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid language_pair format. Use ISO codes like 'en-fr', 'fr-en', 'en-es'."
+        )
+
+    # 4 Validate segments
+    if not req.segments or len(req.segments) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Segments list cannot be empty."
+        )
+
+    for idx, seg in enumerate(req.segments):
+        if not seg.path.strip():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Segment #{idx + 1}: 'path' cannot be empty."
+            )
+        if not seg.text.strip():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Segment #{idx + 1}: 'text' cannot be empty."
+            )
+    # Logging
     logger.info(
-        f"[generate] Tenant={req.tenant_id} Domain={req.domain} language_pair={req.language_pair} country={req.country}")
+        f"[generate] Tenant={req.tenant_id} Domain={req.domain} language_pair={req.language_pair} country={req.country}"
+    )
     logger.info("[generate] Loading style pack and checking cache...")
 
     # call engine
@@ -93,7 +140,7 @@ async def suggestions_generate(req: GenerateRequest, db: Session = Depends(get_d
     db.commit()
     logger.info("[generate] Suggestions stored successfully in PostgreSQL.")
 
-    return {"status": "ok", "data": out}
+    return {"status": "Success", "data": out}
 
 
 @router.post("/apply")
@@ -101,7 +148,24 @@ async def suggestions_apply(req: ApplyRequest, db: Session = Depends(get_db)):
     """
     Accept or reject a suggestion. This persists an audit entry and (for accept) writes the change into Suggestion table.
     Frontend should itself update displayed text (we store audit + updated suggestion record).
+    expected body
+
+    {
+    "tenant_id": "68cabc6b4eddddad0891642b",
+    "translation_id": 40,
+    "path": "fullData.storeData.products.0.title",
+    "suggestion_id": "54",
+    "user_id": "68cabc6b4eddddad0891642b",
+    "action": "reject",
+    "before": "Ventilateur portable sans pales à suspendre au cou – Rechargeable, silencieux et mains libres pour l'été", 
+    "after": "Ventilateur portable sans pales à porter autour du cou – Rechargeable, silencieux et mains libres pour l'été",
+    "metadata": {
+        "doc_type": "Legal",
+        "language_pair": "en-fr"
+        }
+    }
     """
+
     logger.info(
         f"[apply] Applying suggestion {req.suggestion_id} | Action={req.action}")
     print(f"action is {req.action}")

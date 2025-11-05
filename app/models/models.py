@@ -30,6 +30,8 @@ class Translation(Base):
                         onupdate=func.now(), nullable=True)
     expert_edit = Column(Boolean, default=False, nullable=True)
     customer_edit = Column(Boolean, default=False, nullable=True)
+    transAccept = Column(Boolean, default=False, nullable=True)
+    transEdit = Column(Boolean, default=False, nullable=True)
 
 
 # old model
