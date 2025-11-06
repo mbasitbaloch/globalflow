@@ -13,6 +13,7 @@ class Settings:
     GEMINI_API_KEY_2: str = os.getenv("GEMINI_API_KEY_2", "")
     OPENAI_API_KEY_1: str = os.getenv("OPENAI_API_KEY_1", "")
     OPENAI_API_KEY_2: str = os.getenv("OPENAI_API_KEY_2", "")
+    OPENAI_API_KEY_3: str = os.getenv("OPENAI_API_KEY_3", "")
     REDIS_URL: str = os.getenv("REDIS_URL", "")
     MONGO_URL: str = os.getenv("MONGO_URL", "")
     MONGO_DB: str = os.getenv("MONGO_DB", "")
