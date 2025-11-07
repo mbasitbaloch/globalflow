@@ -54,10 +54,8 @@ class ApplyRequest(BaseModel):
     suggestion_id: str = Field(..., description="Suggestion record ID")
     user_id: str = Field(..., description="User performing the action")
     action: str = Field(..., description="Action must be 'accept' or 'reject'")
-    before: Optional[str] = Field(
-        None, description="Original string before change")
-    after: Optional[str] = Field(
-        None, description="Updated string after change")
+    before: str = Field(..., description="Original string before change")
+    after: str = Field(..., description="Updated string after change")
     metadata: Optional[Dict] = Field(None, description="Additional info")
 
     model_config = ConfigDict(

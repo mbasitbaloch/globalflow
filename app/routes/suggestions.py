@@ -172,6 +172,11 @@ async def suggestions_apply(req: ApplyRequest, db: Session = Depends(get_db)):
 
     if req.action not in ("accept", "reject"):
         raise HTTPException(status_code=400, detail="invalid action")
+
+    if req.before == req.after:
+        raise HTTPException(
+            status_code=400, detail="Before and After cannot be the same")
+
     # audit write
     audit = SuggestionAudit(
         suggestion_id=req.suggestion_id,
