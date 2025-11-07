@@ -52,8 +52,7 @@ class ApplyRequest(BaseModel):
     translation_id: int = Field(..., description="Translation record ID")
     path: str = Field(..., description="JSON path where the change applies")
     suggestion_id: str = Field(..., description="Suggestion record ID")
-    user_id: str = Field(
-        None, description="User performing the action")
+    user_id: str = Field(..., description="User performing the action")
     action: str = Field(..., description="Action must be 'accept' or 'reject'")
     before: Optional[str] = Field(
         None, description="Original string before change")
