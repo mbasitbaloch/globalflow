@@ -145,7 +145,8 @@ async def meaning_shift_risk(original: str, candidate: str, doc_type: str) -> Tu
     )
     try:
         resp = await openai_async.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1",
+            # response_format={"type": "json_object"},  # ensures JSON only
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             max_tokens=200
@@ -170,107 +171,121 @@ async def meaning_shift_risk(original: str, candidate: str, doc_type: str) -> Tu
 # ----------------- generate suggestions using constrained LLM prompt -----------------
 
 
-async def generate_candidate_suggestions(segment_text: str,
-                                         style_pack: dict,
-                                         language_pair: str,
-                                         target_country: str,
-                                         n: int = 3
-                                         ) -> List[Dict[str, Any]]:
+async def generate_candidate_suggestions(
+    segment_text: str,
+    style_pack: dict,
+    language_pair: str,
+    target_country: str,
+    n: int = 3
+) -> List[Dict[str, Any]]:
     """
-    Returns a list of candidate suggestions (type, after, rationale, confidence).
-    Adds localization awareness based on target_language and target_country.
+    Generate up to n suggestions (grammar, fluency, style, idioms)
+    with consistent JSON output using GPT-4.1 or gpt-4.1.
     """
-    # We will ask the model to produce a JSON array of suggestion objects,
-    # each with type ∈ {grammar,fluency,style,idiom}, after, rationale, confidence (0..1).
-    prompt = f"""
-You are a constrained text editor and linguistic expert.
-
-Task:
-Propose up to {n} non-factual-edit suggestions (grammar, fluency, style, and idiom) for the given text.
-
-
-Localization Rule:
-- The text is written in **{language_pair}** as used in **{target_country}**.
-- Make sure all suggestions align with how this language is naturally written and spoken in that country.
-- Adjust spelling, idioms, tone, and phrasing to match the country's local variant.
-  Examples:
-  - English (United States): "color", "customization"
-  - English (United Kingdom): "colour", "customisation"
-  - French (France) vs French (Canada): adapt expressions and tone accordingly
-  - Arabic (Egypt) vs Arabic (Saudi Arabia): use local vocabulary
-- Keep the meaning unchanged; only improve fluency or localization accuracy.
-
-
-Rules:
-- Do NOT invent new facts or numbers.
-- Keep glossary terms stable.
-- Do NOT change tokens that look like SKUs, URLs, emails, or numbers.
-- Each suggestion object must have: type, after, rationale, confidence (0..1).
-- Provide only JSON: an array of objects.
-
-Style pack (brief): {json.dumps(style_pack, ensure_ascii=False)}
-Source: {segment_text}
-"""
-
-    # --- normalize suggestion types ---
     required_types = ["grammar", "fluency", "style", "idioms"]
 
-    def safe_json_loads(s: str):
+    system_prompt = (
+        "You are a linguistic and editorial assistant. "
+        "Your job is to improve grammar, fluency, style, and idiomatic usage. "
+        "Always return a JSON array. "
+        "Each object MUST have keys: type, after, rationale, confidence. "
+        "Allowed types: grammar, fluency, style, idioms. "
+        "Do not include markdown, explanations, or text outside JSON."
+    )
+
+    user_prompt = f"""
+Text: {segment_text}
+
+Make up to {n} improvement suggestions for grammar, fluency, style, or idioms.
+- Language pair: {language_pair}
+- Country: {target_country}
+- Preserve the exact meaning, especially legal/contractual terms.
+- Keep placeholders, numbers, and glossary terms unchanged.
+
+Output ONLY a valid JSON object like:
+[
+  {{"type": "grammar", "after": "Corrected sentence", "rationale": "Fixed verb agreement", "confidence": 0.95}},
+  {{"type": "style", "after": "Improved clarity", "rationale": "Simplified phrasing", "confidence": 0.90}}
+]
+"""
+
+    def clean_and_parse(raw: str):
+        """Remove markdown fences and safely parse JSON."""
+        raw = raw.strip()
+        raw = re.sub(r"^```[a-zA-Z]*", "", raw)
+        raw = raw.strip("` \n\t")
         try:
-            return json.loads(s)
-        except json.JSONDecodeError as e:
-            logger.warning(f"[JSONDecode] Primary decode failed: {e}")
-            # Try cleaning and retrying
-            s = re.sub(r",\s*([\]}])", r"\1", s)
-            s = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", s)
-            s = s.strip().strip("`")
+            return json.loads(raw)
+        except Exception:
+            # attempt to repair minor trailing commas
             try:
-                return json.loads(s)
-            except Exception as e2:
-                logger.error(f"[JSONDecode] Secondary decode failed: {e2}")
-                return []
+                return json.loads(re.sub(r",\s*([\]}])", r"\1", raw))
+            except Exception:
+                return None
 
     try:
         resp = await openai_async.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.5,
-            max_tokens=400
+            model="gpt-4.1",  # or "gpt-4.1" for more quality
+            # response_format={"type": "json_object"},  # ✅ correct format
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.4,
+            max_tokens=500
         )
-        content = resp.choices[0].message.content.strip()
-        if content.startswith("```"):
-            content = re.sub(r"^```[a-zA-Z]*", "", content).strip("`").strip()
-        # data = json.loads(content)
 
-        # parsed = safe_json_loads(content)
-        parsed = json.loads(content)
-        # Sometimes model gives dict with 'suggestions', sometimes plain list
-        data = parsed.get("suggestions") if isinstance(
-            parsed, dict) else parsed or []
+        content = resp.choices[0].message.content or ""
 
-        # --- normalize suggestion types ---
-        normalized = []
-        seen_types = set()
+        if not content.strip() or '"error"' in content.lower():
+            logger.warning(f"[empty/error-response] {content}")
+            return [{
+                "suggestion_id": str(uuid.uuid4()),
+                "type": "grammar",
+                "before": segment_text,
+                "after": segment_text,
+                "rationale": "fallback — model returned error or empty",
+                "confidence": 0.4,
+                "blocked": True,
+                "blocks": ["model_error"],
+                "risk": "low",
+                "risk_confidence": 1.0
+            }]
 
-        for s in data:
-            stype = s.get("type", "").lower()
-            if stype in required_types and stype not in seen_types:
+        # The model sometimes returns a single JSON object with "suggestions"
+        # e.g. { "suggestions": [ {...}, {...} ] }
+        try:
+            data = json.loads(content)
+            if isinstance(data, dict) and "suggestions" in data:
+                parsed = data["suggestions"]
+            else:
+                parsed = data if isinstance(data, list) else None
+        except Exception:
+            parsed = clean_and_parse(content)
+
+        if not parsed or not isinstance(parsed, list):
+            logger.warning(f"[parse-fallback] Invalid JSON: {content[:200]}")
+            parsed = []
+
+        # Normalize results
+        normalized, seen = [], set()
+        for s in parsed:
+            stype = str(s.get("type", "")).lower().strip()
+            if stype in required_types and stype not in seen:
+                s["suggestion_id"] = str(uuid.uuid4())
+                s["before"] = segment_text
+                s.setdefault("rationale", "")
+                s.setdefault("confidence", 0.7)
+                s.setdefault("blocked", False)
+                s.setdefault("blocks", [])
+                s.setdefault("risk", "low")
+                s.setdefault("risk_confidence", 1.0)
                 normalized.append(s)
-                seen_types.add(stype)
+                seen.add(stype)
 
-            # # Skip duplicates
-            # if suggestion_type in seen_types:
-            #     continue
-
-            # # Add only allowed types
-            # if suggestion_type in required_types:
-            #     normalized_suggestions.append(s)
-            #     seen_types.add(suggestion_type)
-
-        # Add missing ones with fallback
-        # fill missing ones (fallbacks)
+        # Ensure all required types exist (fallbacks)
         for t in required_types:
-            if t not in seen_types:
+            if t not in seen:
                 normalized.append({
                     "suggestion_id": str(uuid.uuid4()),
                     "type": t,
@@ -279,26 +294,27 @@ Source: {segment_text}
                     "rationale": f"fallback — no {t} change",
                     "confidence": 0.4,
                     "blocked": True,
-                    "blocks": ["glossary", "compliance"],
+                    "blocks": ["fallback"],
                     "risk": "low",
                     "risk_confidence": 1.0
                 })
 
-        # ensure order grammar→fluency→style→idioms
-        ordered = sorted(
-            normalized, key=lambda s: required_types.index(s["type"]))
-
-        return ordered
+        # Sort to maintain consistent order
+        return sorted(normalized, key=lambda s: required_types.index(s["type"]))
 
     except Exception as e:
         logger.exception("generate_candidate_suggestions failed: %s", e)
-        # fallback heuristic: simple grammar swaps — minimal
         return [{
-            "id": str(uuid.uuid4()),
+            "suggestion_id": str(uuid.uuid4()),
             "type": "fluency",
+            "before": segment_text,
             "after": segment_text,
-            "rationale": "fallback — no changes",
-            "confidence": 0.4
+            "rationale": "fallback — exception occurred",
+            "confidence": 0.4,
+            "blocked": True,
+            "blocks": ["exception"],
+            "risk": "low",
+            "risk_confidence": 1.0
         }]
 
 # ----------------- main public API function -----------------
