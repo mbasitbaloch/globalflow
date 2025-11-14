@@ -19,6 +19,7 @@ import hashlib
 import logging
 import asyncio
 import aiohttp
+from ..validator.countryValidator import validate_language_and_country
 
 logger = logging.getLogger("suggestion_engine")
 
@@ -282,7 +283,7 @@ async def generate_candidate_suggestions(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.4,
+                temperature=0.5,
                 max_tokens=max_tokens,
                 timeout=30
             )
@@ -375,6 +376,7 @@ async def produce_suggestions(
     glossary: List[str] = None,
     compliance_patterns: List[str] = None
 ) -> Dict[str, Any]:
+
     style_pack = load_style_pack(tenant_id, language_pair, domain, country)
     glossary = glossary or style_pack.get("do_not_change", []) or []
     compliance_patterns = compliance_patterns or []
@@ -390,6 +392,17 @@ async def produce_suggestions(
         # if cached:
         #     logger.info(f"[cache-hit] {path}")
         #     return {"path": path, "original": text, "suggestions": cached["suggestions"], "scores": cached.get("scores", {})}
+
+        # Validate language and country
+        valid, validation_msg = validate_language_and_country(
+            language_pair,
+            country,
+            text  # Pass the text string directly
+        )
+        if not valid:
+            logger.error(f"Validation failed for {path}: {validation_msg}")
+            # Should not reach here due to early validation
+            raise ValueError(validation_msg)
 
         candidates = await generate_candidate_suggestions(
             segment_text=text,

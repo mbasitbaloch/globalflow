@@ -17,6 +17,7 @@ import uuid
 import json
 from ..config import settings
 import logging
+from ..validator.countryValidator import validate_language_and_country
 
 
 logger = logging.getLogger("suggestions_api")
@@ -34,7 +35,7 @@ async def suggestions_generate(req: GenerateRequest, db: Session = Depends(get_d
     "translation_id":40,
     "doc_type": "Legal",
     "domain": "globalflow-ai-esp.myshopify.com",
-    "country": "CA-CA", 
+    "country": "CA-CA",
     "language_pair": "en-fr",
     "preserve_legal_meaning": true,
     "segments": [
@@ -104,43 +105,71 @@ async def suggestions_generate(req: GenerateRequest, db: Session = Depends(get_d
                 status_code=400,
                 detail=f"Segment #{idx + 1}: 'text' cannot be empty."
             )
+     # Validate text language against language_pair
+    for idx, seg in enumerate(req.segments):
+        valid, validation_msg = validate_language_and_country(
+            language_pair=req.language_pair,
+            country_code=req.country,
+            text=seg.text
+        )
+        if not valid:
+            logger.error(
+                f"Validation failed for segment #{idx + 1} ({seg.path}): {validation_msg}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Segment #{idx + 1} ({seg.path}): {validation_msg}"
+            )
+
     # Logging
     logger.info(
         f"[generate] Tenant={req.tenant_id} Domain={req.domain} language_pair={req.language_pair} country={req.country}"
     )
     logger.info("[generate] Loading style pack and checking cache...")
 
-    # call engine
-    out = await produce_suggestions(
-        tenant_id=req.tenant_id,
-        doc_type=req.doc_type,
-        domain=req.domain,
-        country=req.country,
-        language_pair=req.language_pair,
-        preserve_legal_meaning=req.preserve_legal_meaning,
-        segments=[s.dict() for s in req.segments],
-        glossary=req.glossary,
-        compliance_patterns=req.compliance_patterns
-    )
-    logger.info("[generate] Suggestions generated successfully.")
-    logger.info("[generate] Storing results in PostgreSQL...")
-    # store suggestions in DB (for audit & indexing)
-    for seg in out["suggestions"]:
-        s_model = Suggestion(
+    try:
+        # Call suggestion engine
+        out = await produce_suggestions(
             tenant_id=req.tenant_id,
-            translation_id=req.translation_id,
             doc_type=req.doc_type,
             domain=req.domain,
+            country=req.country,
             language_pair=req.language_pair,
-            path=seg["path"],
-            original_text=seg["original"],
-            suggestions=seg["suggestions"]
+            preserve_legal_meaning=req.preserve_legal_meaning,
+            segments=[s.dict() for s in req.segments],
+            glossary=req.glossary,
+            compliance_patterns=req.compliance_patterns
         )
-        db.add(s_model)
-    db.commit()
-    logger.info("[generate] Suggestions stored successfully in PostgreSQL.")
+        # Check for error response
+        # if isinstance(out, dict) and out.get("status") == "Error":
+        #     raise HTTPException(status_code=400, detail=out["message"])
 
-    return {"status": "Success", "data": out}
+        logger.info("[generate] Suggestions generated successfully.")
+        logger.info("[generate] Storing results in PostgreSQL...")
+        # store suggestions in DB (for audit & indexing)
+        for seg in out["suggestions"]:
+            s_model = Suggestion(
+                tenant_id=req.tenant_id,
+                translation_id=req.translation_id,
+                doc_type=req.doc_type,
+                domain=req.domain,
+                language_pair=req.language_pair,
+                path=seg["path"],
+                original_text=seg["original"],
+                suggestions=seg["suggestions"]
+            )
+            db.add(s_model)
+        db.commit()
+        logger.info(
+            "[generate] Suggestions stored successfully in PostgreSQL.")
+
+        return {"status": "Success", "data": out}
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.exception(f"Error processing suggestions: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.post("/apply")
