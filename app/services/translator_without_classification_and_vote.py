@@ -1,0 +1,824 @@
+import json
+import random
+import re
+import asyncio
+import os
+import sys
+from datetime import datetime
+import time
+from venv import logger
+# from openai import AsyncOpenAI
+# import google.generativeai as genai  # Gemini SDK
+from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from ..config import settings
+from qdrant_client import QdrantClient
+from app.services.hs_langchain import fewshotTranslation, TranslationQuery, promptClassification, voteClassification, SafeJsonParser
+from ..utils.cache_manager import (
+    get_cached_string, set_cached_string,
+    compute_raw_hash, get_full_translation_from_cache, set_full_translation_in_cache
+)
+from ..utils.tasks import store_examples
+from pydantic import SecretStr
+from qdrant_client.http import models
+from collections import defaultdict
+
+
+LOG_DIR = "logs"
+os.makedirs(LOG_DIR, exist_ok=True)
+
+BATCHES_DIR = os.path.join(LOG_DIR, "batches")
+os.makedirs(BATCHES_DIR, exist_ok=True)
+
+REPORT_DIR = os.path.join(LOG_DIR, "report")
+os.makedirs(REPORT_DIR, exist_ok=True)
+
+CONSOLE_DIR = os.path.join(LOG_DIR, "console")
+os.makedirs(CONSOLE_DIR, exist_ok=True)
+console_file = os.path.join(CONSOLE_DIR, "console.json")
+
+raw_logs = [{"message": "Logs"}]
+with open(console_file, "w", encoding="utf-8") as f:
+    json.dump(raw_logs[0], f, ensure_ascii=False, indent=4)
+
+# ===================== GLOBAL REPORT TRACKER =====================
+TRANSLATION_STATS = {
+    "rate_limits": {
+        "openai1": [],
+        "openai2": [],
+        "openai3": [],
+        "gemini1": [],
+        "total": []
+    },
+    "fallbacks": {
+        "openai1": [],
+        "openai2": [],
+        "openai3": [],
+        "gemini1": []
+    },
+    "tokens": {
+        "openai1": [],
+        "openai2": [],
+        "openai3": [],
+        "gemini1": []
+    },
+    "mismatches": {
+        "batches": [],
+        "total_mismatched": 0
+    }
+}
+
+
+# ==== CLIENTS ====
+
+langchain_openai_1 = ChatOpenAI(
+    model="gpt-4.1-mini",
+    temperature=0.7,
+    api_key=SecretStr(settings.OPENAI_API_KEY_1)
+)
+langchain_openai_2 = ChatOpenAI(
+    model="gpt-4.1-mini",
+    temperature=0.7,
+    api_key=SecretStr(settings.OPENAI_API_KEY_2)
+)
+
+langchain_openai_3 = ChatOpenAI(
+    model="gpt-4.1-mini",
+    temperature=0.7,
+    api_key=SecretStr(settings.OPENAI_API_KEY_3)
+)
+
+langchain_gemini_1 = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash-lite",
+    temperature=0.7,
+    google_api_key=settings.GEMINI_API_KEY_1
+)
+
+# openai_model_1 = AsyncOpenAI(
+#     api_key=settings.OPENAI_API_KEY_1,
+#     timeout=150.0
+# )
+
+# openai_model_2 = AsyncOpenAI(
+#     api_key=settings.OPENAI_API_KEY_2,
+#     timeout=150.0
+# )
+
+# genai.configure(api_key=settings.GEMINI_API_KEY_1) # type: ignore
+# gemini_model_1 = genai.GenerativeModel("gemini-2.0-flash-lite") # type: ignore # gemini-1.5-flash
+
+# genai.configure(api_key=settings.GEMINI_API_KEY_2)
+# gemini_model_2 = genai.GenerativeModel("gemini-1.5-flash")
+
+qdrant = QdrantClient(
+    url=settings.QDRANT_URL,
+    api_key=settings.QDRANT_API_KEY,
+    prefer_grpc=False,
+    timeout=60
+)
+
+# ==== CONFIG ====
+TRANSLATION_BATCH_SIZE = 50
+MAX_CONCURRENCY_TRANSLATION = 25
+semaphore_translation = asyncio.Semaphore(MAX_CONCURRENCY_TRANSLATION)
+
+translation_model_cycle = ["openai1", "openai2", "openai3", "gemini1"]
+model_index_translation = 0
+
+sys.setrecursionlimit(3000)
+
+
+# ===================== HELPERS =====================
+def is_translateable(text: str) -> bool:
+    unused = [
+        "<strong style=\"text-transform:uppercase\">%{discount_rejection_message}</strong>",
+        "%{product_name} / %{variant_label}",
+        "%{price}%{accessible_separator}%{per_unit}",
+        "%{price}/%{unit}",
+        "%{price}/%{count}%{unit}",
+        "•••• %{last_characters}",
+        "%{quantity} × %{product_title}",
+        "%{min_time}–%{max_time}",
+        "%{firstMethod}, %{secondMethod}",
+        "%{rest}, %{current},",
+        "%{merchandise_title} ×%{quantity}",
+        "•••• %{last_digits}",
+        "%{currency} (%{currency_symbol})",
+        "1 %{from_currency_code} = %{rate} %{to_currency_code}",
+        "%{tip_percent}%",
+        "+{{numberOfAdditionalProducts}}",
+        "-",
+        "{{count}}+",
+        "{{ quantity }}+",
+        "<p></p>",
+        "CPF/CNPJ",
+        "RUT",
+        "CI/RUC/IVA",
+        "NIT/IVA",
+        "NPWP",
+        "RFC",
+        "DNI/RUC/CE",
+        "NIF/IVA",
+        "DNI/NIF",
+        "SKU",
+    ]
+    if not text or not text.strip():
+        return False
+    if text.isdigit():
+        return False
+    if re.match(r"^\d+(\.\d+)?$", text):
+        return False
+    if re.match(r"^\d{4}-\d{2}-\d{2}T", text):
+        return False
+    if re.match(r"^[a-f0-9]{32,64}$", text):
+        return False
+    if text.startswith("gid://"):
+        return False
+    if re.match(r"^\{\{.*\}\}$", text):
+        return False
+    if re.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", text.strip()):
+        return False
+    if re.match(r"^https?://", text):
+        return False
+    if text.startswith(("shopify.", "customer.", "customer_", "templates.", "section.", "sections.", "GlobalFlow.", "shopify:")):
+        return False
+    if text in unused:
+        return False
+    return True
+
+
+def clean_line(line: str) -> str:
+    line = line.replace("\u0000", "").replace("\x00", "")
+    return re.sub(r'^\d+[\.\)]\s*', '', line).strip()
+
+
+async def with_retry(fn, *args, retries=3, **kwargs):
+    provider = kwargs.get("provider", "unknown")
+    batch_num = kwargs.get("batch_num", 0)
+    type = kwargs.get("type", "N/A")
+    for i in range(retries):
+        try:
+            # filtered_kwargs = {
+            #     k: v for k, v in kwargs.items()
+            #     if k not in ("provider", "batch_num", "type")
+            # }
+            return await fn(*args, **kwargs)
+        except Exception as e:
+            if "Rate limit" in str(e) or "quota" in str(e).lower():
+                wait = (2 ** i) + random.random()
+                msg = f"⚠ Rate limit for {provider}, batch {type} {batch_num}, retrying in {wait:.2f}s..."
+                print(msg)
+                TRANSLATION_STATS["rate_limits"]["total"].append(
+                    {"provider": provider, "time": datetime.now().isoformat(), "wait": wait})
+                TRANSLATION_STATS["rate_limits"][provider].append(
+                    {"time": datetime.now().isoformat(), "wait": wait})
+                await asyncio.sleep(wait)
+            else:
+                print(
+                    f"⚠ Error in, batch {type} {batch_num}, {provider}: {e}")
+                await asyncio.sleep(2)
+                break
+    raise Exception(
+        f"Max retries reached for {type} {batch_num} by {provider}")
+
+
+def qdrant_examples(shopDomain, targetLanguage, user_id):
+    start = datetime.now()
+    fewshot_data = None
+    qdrant_collection = settings.COLLECTION_NAME
+
+    qdrant.create_payload_index(
+        collection_name=qdrant_collection,
+        field_name="shopDomain",
+        field_schema=models.PayloadSchemaType.KEYWORD
+    )
+
+    qdrant.create_payload_index(
+        collection_name=qdrant_collection,
+        field_name="targetLanguage",
+        field_schema=models.PayloadSchemaType.KEYWORD
+    )
+
+    qdrant.create_payload_index(
+        collection_name=qdrant_collection,
+        field_name="user_id",
+        field_schema=models.PayloadSchemaType.KEYWORD
+    )
+
+    qdrant.create_payload_index(
+        collection_name=qdrant_collection,
+        field_name="type",
+        field_schema=models.PayloadSchemaType.KEYWORD
+    )
+
+    scroll_results, _ = qdrant.scroll(
+        collection_name=qdrant_collection,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="shopDomain",
+                    match=models.MatchValue(value=shopDomain)
+                ),
+                models.FieldCondition(
+                    key="targetLanguage",
+                    match=models.MatchValue(value=targetLanguage)
+                ),
+                models.FieldCondition(
+                    key="user_id",
+                    match=models.MatchValue(value=user_id)
+                ),
+                models.FieldCondition(
+                    key="type",
+                    match=models.MatchValue(value="prompt_data")
+                )
+            ]
+        ),
+        with_payload=True,
+        limit=1
+    )
+
+    for point in scroll_results:
+        fewshot_data = point.payload.get(
+            "fewshot_data") if point.payload else None
+
+    examples = []
+    if fewshot_data:
+        if isinstance(fewshot_data, str):
+            fewshot_data = json.loads(fewshot_data)
+
+        examples = [
+            {
+                "original": json.dumps([ex.get("original", "") for ex in fewshot_data[:50]], ensure_ascii=False),
+                "translated": json.dumps([ex.get("translated", "") for ex in fewshot_data[:50]], ensure_ascii=False)
+            },
+            {
+                "original": json.dumps([ex.get("original", "") for ex in fewshot_data[50:100]], ensure_ascii=False),
+                "translated": json.dumps([ex.get("translated", "") for ex in fewshot_data[50:100]], ensure_ascii=False)
+            },
+            {
+                "original": json.dumps([ex.get("original", "") for ex in fewshot_data[100:150]], ensure_ascii=False),
+                "translated": json.dumps([ex.get("translated", "") for ex in fewshot_data[100:150]], ensure_ascii=False)
+            },
+        ]
+
+    end = datetime.now()
+    print(
+        f"Examples for fewshot retrieved from qdrant, time taken: {end-start}")
+    return examples
+
+# ===================== TRANSLATION FUNCTIONS =====================
+
+
+async def _translate_openai(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, model, batch_num, type, provider):
+    query = TranslationQuery(
+        input=strings,
+        user_id=user_id,
+        shopDomain=shopDomain,
+        targetLanguage=target_lang,
+        targetCountry=targetCountry,
+        brandTone=brand_tone,
+        industry=industry,
+        num_strings=len(strings),
+    )
+
+    content = await fewshotTranslation(examples, model, query, SafeJsonParser)
+
+    if isinstance(content, str):
+        content = content.strip()
+        content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
+        content = re.sub(r"```$", "", content)
+        content = content.strip()
+    try:
+        data = json.loads(content) if isinstance(content, str) else content
+        if isinstance(data, dict) and "translations" in data:
+            return [clean_line(x) for x in data["translations"]]
+        elif isinstance(data, list):
+            return [clean_line(x) for x in data]
+        else:
+            raise ValueError("Unexpected OpenAI response")
+    except Exception as e:
+        print(f"⚠ Parse fallback {provider} for {type} batch {batch_num}: {e}")
+        content_str = str(content)
+        lines = [line for line in content_str.splitlines() if line.strip()]
+        return [clean_line(line) for line in lines]
+
+
+async def translate_openai_1(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider):
+    return await _translate_openai(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, langchain_openai_1, batch_num, type, provider)
+
+
+async def translate_openai_2(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider):
+    return await _translate_openai(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, langchain_openai_2, batch_num, type, provider)
+
+
+async def translate_openai_3(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider):
+    return await _translate_openai(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, langchain_openai_3, batch_num, type, provider)
+
+
+async def _translate_gemini(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, model, batch_num, type, provider):
+    query = TranslationQuery(
+        input=strings,
+        user_id=user_id,
+        shopDomain=shopDomain,
+        targetLanguage=target_lang,
+        targetCountry=targetCountry,
+        brandTone=brand_tone,
+        industry=industry,
+        num_strings=len(strings),
+    )
+
+    content = await fewshotTranslation(examples, model, query, SafeJsonParser)
+
+    if isinstance(content, str):
+        content = content.strip()
+        content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
+        content = re.sub(r"```$", "", content)
+        content = content.strip()
+    try:
+        data = json.loads(content) if isinstance(content, str) else content
+        if isinstance(data, dict) and "translations" in data:
+            return [clean_line(x) for x in data["translations"]]
+        elif isinstance(data, list):
+            return [clean_line(x) for x in data]
+        else:
+            raise ValueError("Unexpected Gemini response")
+    except Exception as e:
+        print(f"⚠ Parse fallback {provider} for {type} batch {batch_num}: {e}")
+        content_str = str(content)
+        lines = [line for line in content_str.splitlines() if line.strip()]
+        return [clean_line(line) for line in lines]
+
+
+async def translate_gemini_1(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider):
+    return await _translate_gemini(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, langchain_gemini_1, batch_num, type, provider)
+
+
+# # async def translate_gemini_2(strings, target_lang, brand_tone):
+# #     return await _translate_gemini(strings, target_lang, brand_tone, gemini_model_2)
+
+
+# # ===================== BATCH TRANSLATION =====================
+async def _translate_batch(indexed_strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, total_batches, type, translation_progress=None, logs={}):
+    global model_index_translation
+    strings = [s for _, s in indexed_strings]
+    # print(strings)
+    logs[f"{type}_{batch_num}"] = {}
+
+    # Define provider order
+    translation_model_cycle = ["openai1", "openai2", "openai3", "gemini1"]
+    models_used = []
+
+    async with semaphore_translation:
+        current_model = translation_model_cycle[model_index_translation % len(
+            translation_model_cycle)]
+        model_index_translation += 1
+        logs[f"{type}_{batch_num}"]["print"] = f"\n[DEBUG] {type.upper()} Batch {batch_num}/{total_batches} via {current_model} → {len(strings)} strings"
+        print(logs[f"{type}_{batch_num}"]["print"])
+
+        try:
+            start = time.time()
+            if current_model == "openai1":
+                translations = await with_retry(translate_openai_1, strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, provider=current_model, type=type)
+            elif current_model == "openai2":
+                translations = await with_retry(translate_openai_2, strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, provider=current_model, type=type)
+            elif current_model == "openai3":
+                translations = await with_retry(translate_openai_3, strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, provider=current_model, type=type)
+            else:
+                translations = await with_retry(translate_gemini_1, strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, provider=current_model, type=type)
+
+            elapsed = time.time() - start
+            # rough estimate if API doesn’t return usage
+            tokens_used = len(" ".join(strings)) // 4
+            TRANSLATION_STATS["tokens"][current_model].append(
+                {"tokens": tokens_used, "time": elapsed})
+            models_used.append(current_model)
+
+        except Exception as e:
+            logs[f"{type}_{batch_num}"]["exc1"] = f"⚠ {current_model} failed for {type} batch {batch_num}, falling back: {e}"
+            print(logs[f"{type}_{batch_num}"]["exc1"])
+            for alt in translation_model_cycle:
+                current_model = alt
+                if current_model in models_used:
+                    continue
+                try:
+                    start = time.time()
+                    if current_model == "openai1":
+                        translations = await translate_openai_1(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider=current_model)
+                    elif current_model == "openai2":
+                        translations = await translate_openai_2(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider=current_model)
+                    elif current_model == "openai3":
+                        translations = await translate_openai_3(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider=current_model)
+                    else:
+                        translations = await translate_gemini_1(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider=current_model)
+
+                    models_used.append(current_model)
+
+                    elapsed = time.time() - start
+                    # rough estimate if API doesn’t return usage
+                    tokens_used = len(" ".join(strings)) // 4
+                    TRANSLATION_STATS["tokens"][current_model].append(
+                        {"tokens": tokens_used, "time": elapsed})
+                    break
+                except Exception as e2:
+                    logs[f"{type}_{batch_num}"]["exc2"] = f"⚠ Fallback {current_model} also failed for {type} batch {batch_num}: {e2}"
+                    print(logs[f"{type}_{batch_num}"]["exc2"])
+            else:
+                raise Exception(
+                    "All providers failed for {type} batch {batch_num}")
+
+        if translations:
+            expected = len(strings)
+            got = len(translations)
+
+            if expected == got:
+                if translation_progress is not None:
+                    translation_progress["valid"] += 1
+                    logs[f"{type}_{batch_num}"][
+                        "valid"] = f"[TRANSLATION PROGRESS: valid] {translation_progress['valid']} valid, {translation_progress['partial']} partial, total {translation_progress['valid']+translation_progress['partial']}/{translation_progress['total']} ({type} batch {batch_num} via {current_model})"
+                    print(logs[f"{type}_{batch_num}"]["valid"])
+                return [(i, t) for (i, _), t in zip(indexed_strings, translations)]
+
+            # --- FIX: force align translations ---
+            elif got < expected:
+                # Pad missing with originals
+                logs[f"{type}_{batch_num}"]["padding"] = f"Expected {expected}, got {got} -> Padding {expected-got} from original batch"
+                print(logs[f"{type}_{batch_num}"]["padding"])
+                translations.extend(strings[got:])
+            else:  # got > expected
+                # Trim extras
+                translations = translations[:expected]
+                logs[f"{type}_{batch_num}"]["truncation"] = f"Expected {expected}, got {got} -> Truncating {got-expected} from translation batch"
+                print(logs[f"{type}_{batch_num}"]["truncation"])
+
+            # Record mismatch stats
+            if expected != got:
+                TRANSLATION_STATS["mismatches"]["batches"].append({
+                    "batch": batch_num, "provider": current_model,
+                    "expected": expected, "got": got, "adjusted_to": len(translations),
+                    "mismatched": abs(expected - got)
+                })
+                TRANSLATION_STATS["mismatches"]["total_mismatched"] += abs(
+                    expected - got)
+
+            if translation_progress is not None:
+                translation_progress["partial"] += 1
+                logs[f"{type}_{batch_num}"][
+                    "partial"] = f"[TRANSLATION PROGRESS: partial] {translation_progress['valid']} valid, {translation_progress['partial']} partial, total {translation_progress['valid']+translation_progress['partial']}/{translation_progress['total']} ({type} batch {batch_num} via {current_model})"
+                print(logs[f"{type}_{batch_num}"]["partial"])
+            return [(i, t) for (i, _), t in zip(indexed_strings, translations)]
+
+
+# ===================== SAVE REPORT =====================
+def save_report():
+    existing = len([f for f in os.listdir(
+        REPORT_DIR) if f.startswith("report_")])
+    report_file = os.path.join(REPORT_DIR, f"report_{existing+1}.json")
+    with open(report_file, "w", encoding="utf-8") as f:
+        json.dump(TRANSLATION_STATS, f, ensure_ascii=False, indent=2)
+    print(f" Report saved to {report_file}")
+
+
+# ===================== MAIN TRANSLATOR =====================
+async def fast_translate_json(target_data, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry):
+    # Compute hash of input data for full JSON caching
+    raw_hash = compute_raw_hash(target_data)
+
+    # Check full JSON cache
+    cached_full_translation = get_full_translation_from_cache(
+        shopDomain, target_lang, brand_tone, raw_hash, targetCountry
+    )
+    if cached_full_translation:
+        print(
+            f"Returning cached full translation for {shopDomain}:{target_lang}:{brand_tone}:{targetCountry}")
+        return cached_full_translation
+
+    positions = []  # (path, string, path_str)
+
+    # ---------- CUSTOM COLLECTION RULES ----------
+    def collect_strings(d, path=None, parent_key=None):
+        if path is None:
+            path = []
+        if isinstance(d, dict):
+            for k, v in d.items():
+                if parent_key == "products" and k in ["title", "descriptionHtml", "productType", "vendor", "status"]:
+                    if isinstance(v, str) and is_translateable(v):
+                        positions.append(
+                            (path + [k], v, ".".join(map(str, path + [k]))))
+                elif parent_key == "images" and k == "altText":
+                    if isinstance(v, str) and is_translateable(v):
+                        positions.append(
+                            (path + [k], v, ".".join(map(str, path + [k]))))
+                elif parent_key == "variants" and k == "title":
+                    if isinstance(v, str) and is_translateable(v):
+                        positions.append(
+                            (path + [k], v, ".".join(map(str, path + [k]))))
+                elif parent_key == "collections" and k in ["title", "descriptionHtml", "handle"]:
+                    if isinstance(v, str) and is_translateable(v):
+                        positions.append(
+                            (path + [k], v, ".".join(map(str, path + [k]))))
+                elif parent_key == "blogs" and k in ["title", "handle"]:
+                    if isinstance(v, str) and is_translateable(v):
+                        positions.append(
+                            (path + [k], v, ".".join(map(str, path + [k]))))
+                elif parent_key == "shopPolicies" and k == "translatableContent" and isinstance(v, list):
+                    for i, item in enumerate(v):
+                        if isinstance(item, dict):
+                            for field in ["value", "locale"]:
+                                if field in item and isinstance(item[field], str) and is_translateable(item[field]):
+                                    positions.append(
+                                        (path + [k, i, field], item[field],
+                                         ".".join(map(str, path + [k, i, field])))
+                                    )
+                elif k == "translatableContent" and isinstance(v, list):
+                    for i, item in enumerate(v):
+                        if isinstance(item, dict):
+                            for field in ["value", "locale"]:
+                                if field in item and isinstance(item[field], str) and is_translateable(item[field]):
+                                    positions.append(
+                                        (path + [k, i, field], item[field],
+                                         ".".join(map(str, path + [k, i, field])))
+                                    )
+                elif k in ["title", "body", "value", "altText", "description", "name"]:
+                    if isinstance(v, str) and is_translateable(v):
+                        positions.append(
+                            (path + [k], v, ".".join(map(str, path + [k]))))
+                else:
+                    collect_strings(v, path + [k], k)
+        elif isinstance(d, list):
+            for i, item in enumerate(d):
+                collect_strings(item, path + [i], parent_key)
+
+    def split_into_chunks(text, max_len=300):
+        sentences = re.split(
+            r'(?<=[.?!])(?=\s|<)|</p>(?=\s|<)|</li>(?=\s|<)|</h[1-6]>(?=\s|<)|</div>(?=\s|<)|'
+            r'<br\s*/?>(?=\s|<)|</tr>(?=\s|<)|</td>(?=\s|<)|</ul>(?=\s|<)|</table>(?=\s|<)|\n{2,}',
+            text,
+            flags=re.IGNORECASE
+        )
+        chunks, current = [], ""
+        for sentence in sentences:
+            if len(current) + len(sentence) + 1 > max_len:
+                if current:
+                    chunks.append(current.strip())
+                current = sentence
+            else:
+                current += (" " if current else "") + sentence
+        if current:
+            chunks.append(current.strip())
+        return chunks
+
+    def expand_strings(strings, max_len=300):
+        expanded = []
+        mapping = []
+        counter = 0
+        for idx, text in enumerate(strings):
+            if len(text) > max_len:
+                counter += 1
+                chunks = split_into_chunks(text, max_len)
+                expanded.extend(chunks)
+                mapping.append((idx, len(chunks)))
+                print(
+                    f"Splitting string on index {idx} into {len(chunks)} chunks")
+            else:
+                expanded.append(text)
+                mapping.append((idx, 1))
+        return expanded, mapping
+
+    def collapse_strings(processed_expanded, mapping):
+        collapsed = []
+        pos = 0
+        for idx, count in mapping:
+            merged = " ".join(processed_expanded[pos:pos+count])
+            collapsed.append(merged)
+            pos += count
+            if count > 1:
+                print(
+                    f"String at index {idx} recombined by joining {count} strings")
+        return collapsed
+
+    def dedup_with_index_map(items):
+        index_map = defaultdict(list)
+        for i, item in enumerate(items):
+            index_map[item].append(i)
+        return list(index_map.keys()), index_map
+
+    def reconstruct_from_map(unique_processed, unique_items, index_map, length):
+        reconstructed = [None] * length
+        for item, indices in index_map.items():
+            for i in indices:
+                reconstructed[i] = unique_processed[unique_items.index(item)]
+        return reconstructed
+
+    collect_strings(target_data)
+    strings_to_translate = [s for _, s, _ in positions]
+    print(f"Total strings: {len(strings_to_translate)}")
+
+    locales = [s for _, s, path_str in positions if "locale" in path_str]
+    locale = locales[0] if locales else None
+
+    counter = 0
+    for line in strings_to_translate:
+        words = len(line.split(" "))
+        counter += words
+    print(f"Total words: {counter}")
+
+    expanded, mapping = expand_strings(strings_to_translate, max_len=300)
+    unique_texts, index_map = dedup_with_index_map(expanded)
+    strings_to_process = [(i, s) for i, s in enumerate(unique_texts)]
+
+    cached_results = []
+    uncached = []
+    for i, s in strings_to_process:
+        cached_string = get_cached_string(
+            target_lang, brand_tone, s, targetCountry)
+        if cached_string is not None:
+            cached_results.append((i, cached_string))
+        else:
+            uncached.append((i, s))
+
+    print(
+        f"Total strings to be processed after deduplication and chunking: {len(unique_texts)}")
+    print(f"Total strings to be processed and are uncached: {len(uncached)}")
+
+    # ---- SAVE EXTRACTED ----
+    extracted_log = [{"path": p, "string": s} for _, s, p in positions]
+    extracted_file = os.path.join(
+        LOG_DIR, f"extracted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    with open(extracted_file, "w", encoding="utf-8") as f:
+        json.dump(extracted_log, f, ensure_ascii=False, indent=2)
+    print(f"Saved extracted strings to {extracted_file}")
+
+    def serialize_batches(batches, batch_type):
+        serialized = []
+        for b_idx, batch in enumerate(batches, start=1):
+            serialized.append({
+                "batch_num": b_idx,
+                "type": batch_type,
+                "items": [{"index": i, "string": s} for (i, s) in batch]
+            })
+        return serialized
+
+    # ---- TRANSLATE ----
+    batches = [uncached[i:i+TRANSLATION_BATCH_SIZE]
+               for i in range(0, len(uncached), TRANSLATION_BATCH_SIZE)]
+    total_batches = len(batches)
+
+    start = datetime.now()
+    translation_progress = {"valid": 0, "partial": 0, "total": total_batches}
+    examples = qdrant_examples(shopDomain, target_lang, user_id)
+    translation_tasks = []
+    logs = {}
+
+    for idx, batch in enumerate(batches):
+        translation_tasks.append(_translate_batch(
+            batch, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry,
+            idx+1, total_batches, type="translation", translation_progress=translation_progress, logs=logs
+        ))
+
+    random.shuffle(translation_tasks)
+    results = []
+    for coro in asyncio.as_completed(translation_tasks):
+        res = await coro
+        results.append(res)
+    all_translation_results = results
+
+    with open(console_file, "a", encoding="utf-8") as f:
+        json.dump(logs, f, ensure_ascii=False, indent=4)
+
+    final_translation_pairs = [
+        pair for batch in all_translation_results if batch is not None for pair in batch]
+    final_results = [t for _, t in sorted(
+        final_translation_pairs + cached_results, key=lambda x: x[0])]
+
+    # Cache individual translations
+    for (i, s), t in zip(strings_to_process, final_results):
+        set_cached_string(target_lang, brand_tone, s, t, targetCountry)
+
+    for i in range(len(final_results)):
+        if locale and final_results[i] == locale:
+            print(f"Locale not translated, converting manually")
+            final_results[i] = target_lang
+    print(f"Total strings retained after processing: {len(final_results)}")
+
+    final_results = reconstruct_from_map(
+        final_results, unique_texts, index_map, len(expanded))
+    final_results = collapse_strings(final_results, mapping)
+    end = datetime.now()
+    print(f"Total time consumed for translation: {end-start}")
+
+    comparative_file = os.path.join(LOG_DIR, "comparative.json")
+    with open(comparative_file, "w", encoding="utf-8") as f:
+        json.dump(
+            [{"path": path_str, "orig": orig, "trans": trans} for (
+                path, orig_val, path_str), orig, trans in zip(positions, strings_to_translate, final_results)],
+            f, ensure_ascii=False, indent=2
+        )
+    counter = 0
+    for s, t in zip(strings_to_translate, final_results):
+        if s == t:
+            counter += 1
+    print(
+        f"Saved comparison strings to {comparative_file}, total {counter} strings are not translated, i.e. same as original.")
+
+    # ---------- INJECTION ----------
+    def set_value_with_original(d, path, translated, path_str):
+        ref = d
+        for p in path[:-1]:
+            ref = ref[p]
+        last_key = path[-1]
+        original_value = ref[last_key]
+        prefixed_key = f"original{last_key[0].upper()}{last_key[1:]}"
+        if prefixed_key not in ref:
+            ref[prefixed_key] = original_value
+        ref[last_key] = translated
+        path_key = f"path_{last_key}"
+        ref[path_key] = path_str
+        flag_key = f"aiTranslated_{last_key}"
+        ref[flag_key] = (translated.strip() != original_value.strip())
+        priority_key = f"priorityReview_{last_key}"
+        ref[priority_key] = (translated.strip() == original_value.strip())
+
+    injected_log = []
+    counter = 0
+    local_counter = 0
+    paths_array = []
+    for i, translated in enumerate(final_results):
+        path, orig_val, path_str = positions[i]
+        set_value_with_original(target_data, path, translated, path_str)
+        injected_log.append({
+            "path": path_str,
+            "original": orig_val,
+            "translated": translated,
+            "aiTranslated": translated.strip() != orig_val.strip()
+        })
+        paths_array.append(path_str)
+        counter += 1
+        if "locale" in path_str:
+            if locale and orig_val == locale and translated == target_lang:
+                continue
+            else:
+                local_counter += 1
+
+    print(f"total mismatching of locales {local_counter}")
+    print(f"Total {counter} strings are injected")
+
+    # ---- SAVE INJECTED ----
+    injected_file = os.path.join(
+        LOG_DIR, f"injected_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    with open(injected_file, "w", encoding="utf-8") as f:
+        json.dump(injected_log, f, ensure_ascii=False, indent=2)
+    print(f"Saved injected strings to {injected_file}")
+
+    print(f"Injected {len(final_results)}/{len(strings_to_translate)} strings")
+    save_report()
+
+    # Cache the full translated JSON
+    set_full_translation_in_cache(
+        shopDomain, target_lang, brand_tone, target_data, targetCountry, raw_hash, ttl=2592000  # 30 days
+    )
+
+    print("Celery task started...")
+    task = store_examples.delay(
+        strings_to_translate, final_results, paths_array, shopDomain, target_lang, brand_tone)
+    print(f"New task ID: {task.id}")
+    return target_data
