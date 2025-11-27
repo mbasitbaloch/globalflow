@@ -6,7 +6,6 @@ import os
 import sys
 from datetime import datetime
 import time
-from venv import logger
 # from openai import AsyncOpenAI
 # import google.generativeai as genai  # Gemini SDK
 from langchain_openai import ChatOpenAI
@@ -14,7 +13,6 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from ..config import settings
 from qdrant_client import QdrantClient
 from app.services.hs_langchain import fewshotTranslation, TranslationQuery, promptClassification, voteClassification, SafeJsonParser
-from ..utils.cache_manager import get_cached_string, set_cached_string
 from ..utils.tasks import store_examples
 from pydantic import SecretStr
 from qdrant_client.http import models
@@ -76,12 +74,6 @@ langchain_openai_2 = ChatOpenAI(
     api_key=SecretStr(settings.OPENAI_API_KEY_2)
 )
 
-langchain_openai_3 = ChatOpenAI(
-    model="gpt-4.1-mini",
-    temperature=0.7,
-    api_key=SecretStr(settings.OPENAI_API_KEY_3)
-)
-
 langchain_gemini_1 = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash-lite",
     temperature=0.7,
@@ -113,22 +105,22 @@ qdrant = QdrantClient(
 
 # ==== CONFIG ====
 CLASSIFICATION_BATCH_SIZE = 50
-MAX_CONCURRENCY_CLASSIFICATION = 25
+MAX_CONCURRENCY_CLASSIFICATION = 20
 semaphore_classification = asyncio.Semaphore(MAX_CONCURRENCY_CLASSIFICATION)
 VOTING_BATCH_SIZE = 50
-MAX_CONCURRENCY_VOTING = 25
+MAX_CONCURRENCY_VOTING = 20
 semaphore_voting = asyncio.Semaphore(MAX_CONCURRENCY_VOTING)
 TRANSLATION_BATCH_SIZE = 50
-MAX_CONCURRENCY_TRANSLATION = 25
+MAX_CONCURRENCY_TRANSLATION = 20
 semaphore_translation = asyncio.Semaphore(MAX_CONCURRENCY_TRANSLATION)
 
-classification_model_cycle = ["openai1", "openai2", "openai3", "gemini1"]
+classification_model_cycle = ["openai1", "openai2", "gemini1"]
 model_index_classify = 0
 
-voting_model_cycle = ["openai1", "openai2", "openai3"]
+voting_model_cycle = ["openai1", "openai2"]
 model_index_voting = 0
 
-translation_model_cycle = ["openai1", "openai2", "openai3", "gemini1"]
+translation_model_cycle = ["openai1", "openai2", "gemini1"]
 model_index_translation = 0
 
 sys.setrecursionlimit(3000)
@@ -182,7 +174,7 @@ def is_translateable(text: str) -> bool:
         return False
     if re.match(r"^\{\{.*\}\}$", text):
         return False
-    if re.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", text.strip()):
+    if "@" in text and "." in text:
         return False
     if re.match(r"^https?://", text):
         return False
@@ -221,7 +213,7 @@ async def with_retry(fn, *args, retries=3, **kwargs):
                 await asyncio.sleep(wait)
             else:
                 print(
-                    f"⚠ Error in, batch {type} {batch_num}, {provider}: {e}")
+                    f"⚠ Error in, batch {type} {batch_num}, {provider}: {e}, retrying...")
                 await asyncio.sleep(2)
                 break
     raise Exception(
@@ -351,10 +343,6 @@ async def classify_openai_2(strings_batch, *args, **kwargs):
     return await _classify_openai(strings_batch, langchain_openai_1)
 
 
-async def classify_openai_3(strings_batch, *args, **kwargs):
-    return await _classify_openai(strings_batch, langchain_openai_3)
-
-
 async def _classify_gemini(strings_batch, classification_model):
     """
     Classify strings into 'business' or 'ordinary'.
@@ -391,7 +379,7 @@ async def classify_gemini_1(strings_batch, *args, **kwargs):
 async def _classify_batch(indexed_strings, batch_num, total_batches, classification_progress=None):
     global model_index_classify
     strings = [s for _, s in indexed_strings]
-    classification_model_cycle = ["openai1", "openai2", "openai3", "gemini1"]
+    classification_model_cycle = ["openai1", "openai2", "gemini1"]
     VALID_LABELS = ["ordinary", "business"]
     raw_ordinary = ["ordinary" for i in range(50)]
     async with semaphore_classification:
@@ -406,8 +394,6 @@ async def _classify_batch(indexed_strings, batch_num, total_batches, classificat
                 result = await with_retry(classify_openai_1, strings, batch_num, total_batches, provider=current_model)
             elif current_model == "openai2":
                 result = await with_retry(classify_openai_2, strings, batch_num, total_batches, provider=current_model)
-            elif current_model == "openai3":
-                result = await with_retry(classify_openai_3, strings, batch_num, total_batches, provider=current_model)
             else:  # gemini1
                 result = await with_retry(classify_gemini_1, strings, batch_num, total_batches, provider=current_model)
 
@@ -485,16 +471,12 @@ async def vote_openai_2(strings_batch, *args, **kwargs):
     return await _vote_openai(strings_batch, langchain_openai_2)
 
 
-async def vote_openai_3(strings_batch, *args, **kwargs):
-    return await _vote_openai(strings_batch, langchain_openai_3)
-
-
 # ===================== VOTE CLASSIFICATION =====================
 
 async def _voting_batch(strings_batch, batch_num, total_batches, voting_progress=None):
     global model_index_voting
     strings = [[string, label] for (_, string, label) in strings_batch]
-    voting_model_cycle = ["openai1", "openai2", "openai3"]
+    voting_model_cycle = ["openai1", "openai2"]
     # VALID_VOTES = [True, False]
     raw_votes = [True] * 50
 
@@ -508,10 +490,8 @@ async def _voting_batch(strings_batch, batch_num, total_batches, voting_progress
         try:
             if current_model == "openai1":
                 result = await with_retry(vote_openai_1, strings, batch_num, total_batches, provider=current_model)
-            elif current_model == "openai2":  # openai2
+            else:  # openai2
                 result = await with_retry(vote_openai_2, strings, batch_num, total_batches, provider=current_model)
-            else:  # openai3
-                result = await with_retry(vote_openai_3, strings, batch_num, total_batches, provider=current_model)
 
             votes = []
             for v in result:
@@ -554,13 +534,12 @@ async def _voting_batch(strings_batch, batch_num, total_batches, voting_progress
 
 
 # ===================== TRANSLATION FUNCTIONS =====================
-async def _translate_openai(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, model, batch_num, type, provider):
+async def _translate_openai(strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, model, batch_num, type, provider):
     query = TranslationQuery(
         input=strings,
         user_id=user_id,
         shopDomain=shopDomain,
         targetLanguage=target_lang,
-        targetCountry=targetCountry,
         brandTone=brand_tone,
         industry=industry,
         num_strings=len(strings),
@@ -588,25 +567,20 @@ async def _translate_openai(strings, examples, user_id, shopDomain, target_lang,
         return [clean_line(line) for line in lines]
 
 
-async def translate_openai_1(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider):
-    return await _translate_openai(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, langchain_openai_1, batch_num, type, provider)
+async def translate_openai_1(strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, batch_num, type, provider):
+    return await _translate_openai(strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, langchain_openai_1, batch_num, type, provider)
 
 
-async def translate_openai_2(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider):
-    return await _translate_openai(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, langchain_openai_2, batch_num, type, provider)
+async def translate_openai_2(strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, batch_num, type, provider):
+    return await _translate_openai(strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, langchain_openai_2, batch_num, type, provider)
 
 
-async def translate_openai_3(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider):
-    return await _translate_openai(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, langchain_openai_3, batch_num, type, provider)
-
-
-async def _translate_gemini(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, model, batch_num, type, provider):
+async def _translate_gemini(strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, model, batch_num, type, provider):
     query = TranslationQuery(
         input=strings,
         user_id=user_id,
         shopDomain=shopDomain,
         targetLanguage=target_lang,
-        targetCountry=targetCountry,
         brandTone=brand_tone,
         industry=industry,
         num_strings=len(strings),
@@ -634,8 +608,8 @@ async def _translate_gemini(strings, examples, user_id, shopDomain, target_lang,
         return [clean_line(line) for line in lines]
 
 
-async def translate_gemini_1(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider):
-    return await _translate_gemini(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, langchain_gemini_1, batch_num, type, provider)
+async def translate_gemini_1(strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, batch_num, type, provider):
+    return await _translate_gemini(strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, langchain_gemini_1, batch_num, type, provider)
 
 
 # # async def translate_gemini_2(strings, target_lang, brand_tone):
@@ -643,15 +617,15 @@ async def translate_gemini_1(strings, examples, user_id, shopDomain, target_lang
 
 
 # # ===================== BATCH TRANSLATION =====================
-async def _translate_batch(indexed_strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, total_batches, type, translation_progress=None, logs={}):
+async def _translate_batch(indexed_strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, batch_num, total_batches, type, translation_progress=None, logs={}):
     global model_index_translation
     strings = [s for _, s in indexed_strings]
     # print(strings)
     logs[f"{type}_{batch_num}"] = {}
 
     # Define provider order
-    translation_model_cycle = ["openai1", "openai2", "openai3", "gemini1"] if type == "business" else [
-        "gemini1", "openai1", "openai2", "openai3"]
+    translation_model_cycle = ["openai1", "openai2", "gemini1"] if type == "business" else [
+        "gemini1", "openai1", "openai2"]
     models_used = []
 
     async with semaphore_translation:
@@ -664,13 +638,11 @@ async def _translate_batch(indexed_strings, examples, user_id, shopDomain, targe
         try:
             start = time.time()
             if current_model == "openai1":
-                translations = await with_retry(translate_openai_1, strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, provider=current_model, type=type)
+                translations = await with_retry(translate_openai_1, strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, batch_num, provider=current_model, type=type)
             elif current_model == "openai2":
-                translations = await with_retry(translate_openai_2, strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, provider=current_model, type=type)
-            elif current_model == "openai3":
-                translations = await with_retry(translate_openai_3, strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, provider=current_model, type=type)
+                translations = await with_retry(translate_openai_2, strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, batch_num, provider=current_model, type=type)
             else:
-                translations = await with_retry(translate_gemini_1, strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, provider=current_model, type=type)
+                translations = await with_retry(translate_gemini_1, strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, batch_num, provider=current_model, type=type)
 
             elapsed = time.time() - start
             # rough estimate if API doesn’t return usage
@@ -689,13 +661,11 @@ async def _translate_batch(indexed_strings, examples, user_id, shopDomain, targe
                 try:
                     start = time.time()
                     if current_model == "openai1":
-                        translations = await translate_openai_1(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider=current_model)
+                        translations = await translate_openai_1(strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, batch_num, type, provider=current_model)
                     elif current_model == "openai2":
-                        translations = await translate_openai_2(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider=current_model)
-                    elif current_model == "openai3":
-                        translations = await translate_openai_3(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider=current_model)
+                        translations = await translate_openai_2(strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, batch_num, type, provider=current_model)
                     else:
-                        translations = await translate_gemini_1(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider=current_model)
+                        translations = await translate_gemini_1(strings, examples, user_id, shopDomain, target_lang, brand_tone, industry, batch_num, type, provider=current_model)
 
                     models_used.append(current_model)
 
@@ -765,7 +735,7 @@ def save_report():
 
 
 # ===================== MAIN TRANSLATOR =====================
-async def fast_translate_json(target_data, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry):
+async def fast_translate_json(target_data, user_id, shopDomain, target_lang, brand_tone, industry):
     positions = []  # (path, string, path_str)
 
     # ---------- CUSTOM COLLECTION RULES ----------
@@ -947,20 +917,8 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, tar
     unique_texts, index_map = dedup_with_index_map(expanded)
     strings_to_classify = [(i, s) for i, s in enumerate(unique_texts)]
 
-    cached_results = []
-    uncached = []
-
-    for i, s in strings_to_classify:
-        cached_string = get_cached_string(
-            target_lang, brand_tone, s, targetCountry)
-        if cached_string is not None:
-            cached_results.append((i, cached_string))
-        else:
-            uncached.append((i, s))
-
     print(
         f"Total strings to be processed after deduplication and chunking: {len(unique_texts)}")
-    print(f"Total strings to be processed and are uncached: {len(uncached)}")
 
     # ---- SAVE EXTRACTED ----
     extracted_log = [{"path": p, "string": s} for _, s, p in positions]
@@ -983,8 +941,8 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, tar
         return serialized
 
     # ---- CLASSIFY ----
-    batches = [uncached[i:i+CLASSIFICATION_BATCH_SIZE]
-               for i in range(0, len(uncached), CLASSIFICATION_BATCH_SIZE)]
+    batches = [strings_to_classify[i:i+CLASSIFICATION_BATCH_SIZE]
+               for i in range(0, len(strings_to_classify), CLASSIFICATION_BATCH_SIZE)]
     total_batches = len(batches)
 
     start = datetime.now()
@@ -1112,8 +1070,6 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, tar
 
     translation_progress = {"valid": 0, "partial": 0, "total": len(
         business_batches) + len(ordinary_batches)}
-    logger.info(
-        f"Target Language type: {type(target_lang)}, value: {target_lang}")
     examples = qdrant_examples(shopDomain, target_lang, user_id)
 
     # Run translations in parallel
@@ -1122,11 +1078,11 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, tar
     logs = {}
 
     for idx, batch in enumerate(business_batches):
-        translation_tasks.append(_translate_batch(batch, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, idx+1,
+        translation_tasks.append(_translate_batch(batch, examples, user_id, shopDomain, target_lang, brand_tone, industry, idx+1,
                                                   len(business_batches), type="business", translation_progress=translation_progress, logs=logs))
 
     for idx, batch in enumerate(ordinary_batches):
-        translation_tasks.append(_translate_batch(batch, examples, user_id, shopDomain, target_lang, targetCountry,  brand_tone, industry, idx+1,
+        translation_tasks.append(_translate_batch(batch, examples, user_id, shopDomain, target_lang, brand_tone, industry, idx+1,
                                                   len(ordinary_batches), type="ordinary", translation_progress=translation_progress, logs=logs))
 
     random.shuffle(translation_tasks)
@@ -1151,12 +1107,6 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, tar
     # ---------- RECOMBINE ----------
     final_results = [t for _, t in sorted(
         final_translation_pairs, key=lambda x: x[0])]
-    for (i, string), processed in zip(uncached, final_results):
-        set_cached_string(target_lang, brand_tone, string,
-                          processed, targetCountry)
-    final_results = [t for _, t in sorted(
-        final_translation_pairs+cached_results, key=lambda x: x[0])]
-
     for i in range(len(final_results)):
         if final_results[i] == locale:
             print(f"Locale not translated, converting manually")
@@ -1219,14 +1169,12 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, tar
         # Inject AI flag (success if translated != original)
         flag_key = f"aiTranslated_{last_key}"
         ref[flag_key] = (translated.strip() != original_value.strip())
-
         # Mark priority review if untranslatable
         priority_key = f"priorityReview_{last_key}"
         ref[priority_key] = (translated.strip() == original_value.strip())
 
     injected_log = []
     counter = 0
-    local_counter = 0
     # for i, translated in enumerate(final_results):
     #     path, orig_val, path_str = positions[i]
     #     set_value_with_original(target_data, path, translated)
@@ -1249,15 +1197,13 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, tar
             if orig_val == locale and translated == target_lang:
                 continue
             else:
-                local_counter += 1
-
-    print(f"total mismatching of locales {local_counter}")
+                print(f"mismatching at index {i}")
 
     print(f"Total {counter} strings are injected")
 
     # ---- SAVE INJECTED ----
     injected_file = os.path.join(
-        LOG_DIR, f"injected_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        LOG_DIR, f"today_injected_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
     with open(injected_file, "w", encoding="utf-8") as f:
         json.dump(injected_log, f, ensure_ascii=False, indent=2)
     print(f"Saved injected strings to {injected_file}")
@@ -1266,8 +1212,8 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, tar
         f" Injected {len(final_results)}/{len(strings_to_translate)} strings")
     save_report()
 
-    print("Celery task started...")
-    task = store_examples.delay(strings_to_translate, final_results,
-                                paths_array, shopDomain, target_lang, brand_tone)  # type: ignore
-    print(f"New task ID: {task.id}")
+    # print("Celery task started...")
+    # task = store_examples.delay(strings_to_translate, final_results,
+    #                             paths_array, shopDomain, target_lang, brand_tone)  # type: ignore
+    # print(f"New task ID: {task.id}")
     return target_data

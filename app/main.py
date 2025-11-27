@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routes import translate, ingest
+from .routes import translate, ingest, suggestions
 from .routes import hs_users
 from .database import Base, engine
-from app.models import Translation
+from app.models.models import Translation
 import sentry_sdk
 
 sentry_sdk.init(
@@ -41,3 +41,4 @@ app.add_middleware(
 app.include_router(translate.router, prefix="/api")
 app.include_router(ingest.router, prefix="/api")
 app.include_router(hs_users.router, prefix="/api")
+app.include_router(suggestions.router, prefix="/api")

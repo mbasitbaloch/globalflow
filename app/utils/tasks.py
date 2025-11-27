@@ -3,7 +3,7 @@ import uuid
 from celery import Celery
 from qdrant_client.http.models import PointStruct, VectorParams, Distance
 from ..config import settings
-from ..models import Translation
+from ..models.models import Translation
 from datetime import datetime
 from openai import OpenAI
 from qdrant_client import QdrantClient
@@ -18,10 +18,11 @@ celery_app = Celery(
 
 COLLECTION_NAME = settings.COLLECTION_NAME
 
+
 @celery_app.task()
 def store_data(translated_data, req, raw_data, postgres_id):
     db = SessionLocal()
-    
+
     # OpenAI client with error handling
     try:
         client = OpenAI(api_key=settings.OPENAI_API_KEY_1)
@@ -36,12 +37,12 @@ def store_data(translated_data, req, raw_data, postgres_id):
         prefer_grpc=False,
         timeout=60
     )
-    
+
     # Collection setup with better error handling
     COLLECTION_NAME = settings.COLLECTION_NAME
     if not COLLECTION_NAME:
         raise ValueError("COLLECTION_NAME environment variable is not set.")
-    
+
     collection_exists = qdrant.collection_exists(COLLECTION_NAME)
     if not collection_exists:
         qdrant.create_collection(
@@ -55,7 +56,7 @@ def store_data(translated_data, req, raw_data, postgres_id):
     try:
         print("Storing data in PostgreSQL...")
         today_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+
         # Convert to JSON string for embedding
         json_blob = json.dumps(raw_data, ensure_ascii=False)
 
@@ -118,14 +119,15 @@ def store_data(translated_data, req, raw_data, postgres_id):
             id=str(uuid.uuid4()),
             vector=embedding,
             payload={
+                "type": "translation_data",
                 "shopDomain": req["shopDomain"],
                 "user_id": str(user["_id"]) if user else None,
                 "targetLanguage": req["targetLanguage"],
-                "original_text": raw_data,  
-                "translated_text": translated_data,     
+                "original_text": raw_data,
+                "translated_text": translated_data,
                 "brandTone": req["brandTone"],
                 "date": today_date,
-                "postgres_id": postgres_id,           
+                "postgres_id": postgres_id,
                 "data_type": "complete_json"
             }
         )
@@ -135,28 +137,29 @@ def store_data(translated_data, req, raw_data, postgres_id):
             collection_name=COLLECTION_NAME,
             points=[translation_point]
         )
-        
+
         count = qdrant.count(
             collection_name=COLLECTION_NAME,
             exact=True
         )
-        
+
         print("Qdrant embedding stored successfully.")
         print(f"Total points in collection: {count}")
-        
+
         return {
             "status": "success",
             "postgres_id": postgres_id,
             "qdrant_id": translation_point.id,
             "embedding_size": len(embedding)
         }
-        
+
     except Exception as e:
         db.rollback()
         print(f"Error in store_data task: {e}")
         return f"Error: {e}"
     finally:
         db.close()
+
 
 def create_json_summary(json_data, max_length=8000):
     """
@@ -170,7 +173,7 @@ def create_json_summary(json_data, max_length=8000):
                 "total_items": len(json_data),
                 "sample_data": {}
             }
-            
+
             # Har key ka sample value
             for key in list(json_data.keys())[:10]:  # First 10 keys
                 value = json_data[key]
@@ -178,23 +181,22 @@ def create_json_summary(json_data, max_length=8000):
                     summary["sample_data"][key] = f"{type(value).__name__} ({len(value)} items)"
                 else:
                     summary["sample_data"][key] = str(value)[:100]
-            
+
             return json.dumps(summary, ensure_ascii=False)[:max_length]
-        
+
         elif isinstance(json_data, list):
             return json.dumps({
                 "type": "list",
                 "total_items": len(json_data),
                 "sample_items": json_data[:5] if len(json_data) > 5 else json_data
             }, ensure_ascii=False)[:max_length]
-        
+
         else:
             return str(json_data)[:max_length]
-            
+
     except Exception as e:
         print(f"Error creating summary: {e}")
         return str(json_data)[:max_length]
-
 
 
 @celery_app.task()
@@ -220,12 +222,12 @@ def store_examples(orig, trans, paths, shopDomain, target_lang, brand_tone):
         prefer_grpc=False,
         timeout=60
     )
-    
+
     # Collection setup with better error handling
     COLLECTION_NAME = settings.COLLECTION_NAME
     if not COLLECTION_NAME:
         raise ValueError("COLLECTION_NAME environment variable is not set.")
-    
+
     collection_exists = qdrant.collection_exists(COLLECTION_NAME)
     if not collection_exists:
         qdrant.create_collection(
@@ -237,14 +239,14 @@ def store_examples(orig, trans, paths, shopDomain, target_lang, brand_tone):
         )
     json_blob = json.dumps(raw_data, ensure_ascii=False)
     if len(json_blob) > 8000:  # OpenAI's limit is 8191 tokens
-            print("JSON is large, creating summary for embedding...")
-            # Create a summary for large JSON
-            summary = create_json_summary(raw_data)
-            json_blob = summary
+        print("JSON is large, creating summary for embedding...")
+        # Create a summary for large JSON
+        summary = create_json_summary(raw_data)
+        json_blob = summary
 
     print("Creating embedding for Qdrant...")
 
-        # Create embedding with OpenAI
+    # Create embedding with OpenAI
     response = client.embeddings.create(
         model="text-embedding-3-small",
         input=json_blob,
@@ -265,9 +267,9 @@ def store_examples(orig, trans, paths, shopDomain, target_lang, brand_tone):
             "shopDomain": shopDomain,
             "user_id": str(user["_id"]) if user else None,
             "targetLanguage": target_lang,
-            "fewshot_data": raw_data,     
+            "fewshot_data": raw_data,
             "brandTone": brand_tone,
-            "date": today_date,          
+            "date": today_date,
             "data_type": "complete_json"
         }
     )
@@ -277,11 +279,11 @@ def store_examples(orig, trans, paths, shopDomain, target_lang, brand_tone):
         collection_name=COLLECTION_NAME,
         points=[translation_point]
     )
-        
+
     count = qdrant.count(
         collection_name=COLLECTION_NAME,
         exact=True
     )
-        
+
     print("Qdrant embedding stored successfully.")
     print(f"Total points in collection: {count}")

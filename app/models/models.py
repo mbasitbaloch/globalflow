@@ -1,7 +1,7 @@
 from sqlalchemy import Boolean, Column, Integer, String, Text, ForeignKey, DateTime, func
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
-from .database import Base
+from ..database import Base
 
 
 class Translation(Base):
@@ -13,6 +13,7 @@ class Translation(Base):
     shop_domain = Column(String)
     brand_tone = Column(String)
     target_lang = Column(String)
+    targetCountry = Column(String)
     content_type = Column(String)
 
     # Hybrid fields
@@ -29,6 +30,8 @@ class Translation(Base):
                         onupdate=func.now(), nullable=True)
     expert_edit = Column(Boolean, default=False, nullable=True)
     customer_edit = Column(Boolean, default=False, nullable=True)
+    transAccept = Column(Boolean, default=False, nullable=True)
+    transEdit = Column(Boolean, default=False, nullable=True)
 
 
 # old model
