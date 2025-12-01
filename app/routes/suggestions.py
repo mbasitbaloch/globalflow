@@ -17,7 +17,7 @@ import uuid
 import json
 from ..config import settings
 import logging
-from ..validator.countryValidator import validate_language_and_country
+from ..validator.countryValidator import validate_language
 
 
 logger = logging.getLogger("suggestions_api")
@@ -48,7 +48,7 @@ async def suggestions_generate(req: GenerateRequest, db: Session = Depends(get_d
    # 1 Validate all required fields exist and are non-empty
     required_fields = [
         "tenant_id", "translation_id", "doc_type",
-        "domain", "country", "language_pair",
+        "domain", "target_country", "target_language", "source_language",
         "preserve_legal_meaning", "segments"
     ]
 
@@ -79,14 +79,6 @@ async def suggestions_generate(req: GenerateRequest, db: Session = Depends(get_d
             detail="Invalid domain format. Please provide a valid domain like 'example.myshopify.com' or 'example.ca'."
         )
 
-    # 3 Validate language pair (e.g., en-fr, fr-en)
-    lang_pair = req.language_pair.strip().lower()
-    if not re.match(r"^[a-z]{2}-[a-z]{2}$", lang_pair):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid language_pair format. Use ISO codes like 'en-fr', 'fr-en', 'en-es'."
-        )
-
     # 4 Validate segments
     if not req.segments or len(req.segments) == 0:
         raise HTTPException(
@@ -107,9 +99,8 @@ async def suggestions_generate(req: GenerateRequest, db: Session = Depends(get_d
             )
      # Validate text language against language_pair
     for idx, seg in enumerate(req.segments):
-        valid, validation_msg = validate_language_and_country(
-            language_pair=req.language_pair,
-            country_code=req.country,
+        valid, validation_msg = validate_language(
+            source_language=req.source_language,
             text=seg.text
         )
         if not valid:
@@ -122,7 +113,7 @@ async def suggestions_generate(req: GenerateRequest, db: Session = Depends(get_d
 
     # Logging
     logger.info(
-        f"[generate] Tenant={req.tenant_id} Domain={req.domain} language_pair={req.language_pair} country={req.country}"
+        f"[generate] Tenant={req.tenant_id} Domain={req.domain} target language={req.target_language}, source language {req.source_language} country={req.target_country}"
     )
     logger.info("[generate] Loading style pack and checking cache...")
 
@@ -132,8 +123,9 @@ async def suggestions_generate(req: GenerateRequest, db: Session = Depends(get_d
             tenant_id=req.tenant_id,
             doc_type=req.doc_type,
             domain=req.domain,
-            country=req.country,
-            language_pair=req.language_pair,
+            country=req.target_country,
+            target_language=req.target_language,
+            source_language=req.source_language,
             preserve_legal_meaning=req.preserve_legal_meaning,
             segments=[s.dict() for s in req.segments],
             glossary=req.glossary,
@@ -152,7 +144,8 @@ async def suggestions_generate(req: GenerateRequest, db: Session = Depends(get_d
                 translation_id=req.translation_id,
                 doc_type=req.doc_type,
                 domain=req.domain,
-                language_pair=req.language_pair,
+                target_language=req.target_language,
+                source_language=req.source_language,
                 path=seg["path"],
                 original_text=seg["original"],
                 suggestions=seg["suggestions"]

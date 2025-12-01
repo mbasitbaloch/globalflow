@@ -63,10 +63,11 @@ COUNTRIES = {
     "GR": "Greece",
     "CZ": "Czech Republic",
     "PK": "Pakistan",
-    "SA": "Saudi Arabia",
+    "SA": "Saudi",
     "AE": "United Arab Emirates",
     "EG": "Egypt",
     "IN": "India",
+    "AR": "Argentina"
 }
 
 # Supported brand tones
@@ -79,8 +80,13 @@ BRAND_TONES = [
     "friendly",
     "professional",
     "casual",
-    "Canadian French",
-    "European French",
+    "canadian local French (Quebec French for Canada)",
+    "European local French",
+    "Egyption local arabic",
+    "Saudi local arabic",
+    "Spain Spanish (Castilian / Español de España)",
+    "Mexican Spanish (Español de México).",
+    "Argentinian Spanish(Español Rioplatense)."
 ]
 
 # Common language-country associations (for regional dialect guidance)
@@ -153,10 +159,11 @@ FULL_COUNTRY_MAP = {
     "greece": "GR",
     "czech republic": "CZ",
     "pakistan": "PK",
-    "saudi arabia": "SA",
+    "saudi": "SA",
     "united arab emirates": "AE",
     "egypt": "EG",
     "india": "IN",
+    "argentina": "AR",
 }
 
 

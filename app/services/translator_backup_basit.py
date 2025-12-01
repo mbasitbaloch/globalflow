@@ -446,6 +446,25 @@ async def _translate_openai(strings, target_lang, brand_tone, model, batch_num, 
         If a string is a language code such as "en", replace it with the correct code for {target_lang}.
         Example: "en" → "fr" when {target_lang} is French.
 
+
+        ### Country & Localization Rule
+        Always adapt translations to the **regional variant** of {target_lang} used in **egypt**. Use the natural tone, vocabulary, and phrasing typical for that region.
+        - Adjust tone, spelling, vocabulary, and idioms to sound natural in that region.
+        - Follow these examples for guidance:
+            - English (US): "color", "customize" — friendly, direct tone.
+            - English (UK): "colour", "customise" — formal, polite tone.
+            - English (India): mix of British spelling + Indian idioms.
+            - French (France): standard European French expressions.
+            - French (Canada): Québécois tone and local phrasing.
+            - Arabic (Egypt): colloquial Egyptian Arabic (العامية المصرية) for general content.
+            - Arabic (Saudi Arabia): Gulf Arabic tone (الفصحى الخليجية) for general content.
+            - Urdu (Pakistan): Pakistani-style expressions, Arabic loanwords preferred.
+            - Urdu (India): Indian Urdu with Hindi-influenced vocabulary.
+            - Spanish (Spain): Castilian tone ("vosotros").
+            - Spanish (Mexico): Latin American tone ("ustedes").
+            - If the country’s language has multiple local varieties, choose the most **commonly used** written form for egypt.
+        If unsure, choose the most natural and commonly used phrasing for that country.
+
         Output requirements:
         - Return ONLY a valid JSON array.
         - The array must contain exactly {len(strings)} items.

@@ -202,12 +202,13 @@ def set_cached_string(target_lang, brand_tone, string, processed, targetCountry)
 
 
 # ----------------- Suggestion caching -----------------
-def suggestion_cache_key(tenant_id: str, lang_pair: str, domain: str, segment_hash: str) -> str:
-    return f"sugg:{tenant_id}:{lang_pair}:{domain}:{segment_hash}"
+def suggestion_cache_key(tenant_id: str, source_language: str, target_language: str, domain: str, segment_hash: str) -> str:
+    return f"sugg:{tenant_id}:{source_language}:{target_language}:{domain}:{segment_hash}"
 
 
-def get_suggestions_from_cache(tenant_id: str, lang_pair: str, domain: str, text: str) -> Optional[Dict[str, Any]]:
-    key = suggestion_cache_key(tenant_id, lang_pair, domain, _sha1(text))
+def get_suggestions_from_cache(tenant_id: str, source_language: str, target_language: str, domain: str, text: str) -> Optional[Dict[str, Any]]:
+    key = suggestion_cache_key(
+        tenant_id, source_language, target_language, domain, _sha1(text))
     raw = redis_client.get(key)
     if not raw:
         return None
@@ -217,8 +218,9 @@ def get_suggestions_from_cache(tenant_id: str, lang_pair: str, domain: str, text
         return None
 
 
-def set_suggestions_in_cache(tenant_id: str, lang_pair: str, domain: str, text: str, payload: dict, ttl_seconds: int = 60*60*24*7):
-    key = suggestion_cache_key(tenant_id, lang_pair, domain, _sha1(text))
+def set_suggestions_in_cache(tenant_id: str, source_language: str, target_language: str, domain: str, text: str, payload: dict, ttl_seconds: int = 60*60*24*7):
+    key = suggestion_cache_key(
+        tenant_id, source_language, target_language, domain, _sha1(text))
     redis_client.setex(key, ttl_seconds, json.dumps(
         payload, ensure_ascii=False))
 
@@ -231,12 +233,13 @@ def invalidate_suggestions_for_tenant(tenant_id: str):
 # ----------------- Style pack cache -----------------
 
 
-def stylepack_cache_key(tenant_id: str, language_pair: str, domain: str, country: str) -> str:
-    return f"stylepack:{tenant_id}:{language_pair}:{domain}:{country}"
+def stylepack_cache_key(tenant_id: str, target_language: str, source_language: str, domain: str, country: str) -> str:
+    return f"stylepack:{tenant_id}:{target_language}:{source_language}:{domain}:{country}"
 
 
-def get_stylepack_from_cache(tenant_id: str, language_pair: str, domain: str, country: str):
-    key = stylepack_cache_key(tenant_id, language_pair, domain, country)
+def get_stylepack_from_cache(tenant_id: str, target_language: str, source_language: str, domain: str, country: str):
+    key = stylepack_cache_key(
+        tenant_id, target_language, source_language, domain, country)
     raw = redis_client.get(key)
     if not raw:
         return None
@@ -246,8 +249,9 @@ def get_stylepack_from_cache(tenant_id: str, language_pair: str, domain: str, co
         return None
 
 
-def set_stylepack_in_cache(tenant_id: str, language_pair: str, domain: str, country: str, payload: dict, ttl_seconds: int = 60*60*24*7):
-    key = stylepack_cache_key(tenant_id, language_pair, domain, country)
+def set_stylepack_in_cache(tenant_id: str, target_language: str, source_language: str, domain: str, country: str, payload: dict, ttl_seconds: int = 60*60*24*7):
+    key = stylepack_cache_key(
+        tenant_id, target_language, source_language, domain, country)
     redis_client.setex(key, ttl_seconds, json.dumps(
         payload, ensure_ascii=False))
 

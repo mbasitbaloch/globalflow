@@ -9,7 +9,7 @@ from app.routes.ingest import get_db
 from ..database import SessionLocal
 from ..models.models import Translation
 from ..models.UpdateRequest import UpdateRequest
-from ..services.translator_without_classification_and_vote import fast_translate_json
+from ..services.translator_without_classification_and_vote_old import fast_translate_json
 # from ..mongodb import users_collection
 # from fastapi.responses import JSONResponse, FileResponse
 from qdrant_client import QdrantClient

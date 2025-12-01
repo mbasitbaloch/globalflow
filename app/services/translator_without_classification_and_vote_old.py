@@ -1,4 +1,3 @@
-import openai
 import json
 import random
 import re
@@ -14,7 +13,7 @@ from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from ..config import settings
 from qdrant_client import QdrantClient
-from app.services.hs_langchain_old import TranslationQuery, SafeJsonParser, fewshotTranslation
+from app.services.hs_langchain import fewshotTranslation, fewshotTranslationParallel, TranslationQuery, SafeJsonParser
 from ..utils.cache_manager import (
     get_cached_string, set_cached_string,
     compute_raw_hash, get_full_translation_from_cache, set_full_translation_in_cache
@@ -23,7 +22,6 @@ from ..utils.tasks import store_examples
 from pydantic import SecretStr
 from qdrant_client.http import models
 from collections import defaultdict
-from pathlib import Path
 
 
 LOG_DIR = "logs"
@@ -42,15 +40,6 @@ console_file = os.path.join(CONSOLE_DIR, "console.json")
 raw_logs = [{"message": "Logs"}]
 with open(console_file, "w", encoding="utf-8") as f:
     json.dump(raw_logs[0], f, ensure_ascii=False, indent=4)
-
-
-# Load JSON once at startup
-MANUAL_EXAMPLES_FILE = Path(__file__).parent.parent / \
-    "examples" / "trans_examples.json"
-with open(MANUAL_EXAMPLES_FILE, "r", encoding="utf-8") as f:
-    manual_examples = json.load(f)
-print(f"Manual examples loaded as {type(manual_examples)}")
-
 
 # ===================== GLOBAL REPORT TRACKER =====================
 TRANSLATION_STATS = {
@@ -84,17 +73,20 @@ TRANSLATION_STATS = {
 
 langchain_openai_1 = ChatOpenAI(
     model="ft:gpt-4.1-mini-2025-04-14:globalflow:translation-ft-o1:CeIincdK",
+    # model="gpt-4.1-mini",
     temperature=0.7,
     api_key=SecretStr(settings.OPENAI_API_KEY_1)
 )
 langchain_openai_2 = ChatOpenAI(
     model="ft:gpt-4.1-mini-2025-04-14:globalflow:translation-ft-o2:CeJ66GPt",
+    # model="gpt-4.1-mini",
     temperature=0.7,
     api_key=SecretStr(settings.OPENAI_API_KEY_2)
 )
 
 langchain_openai_3 = ChatOpenAI(
     model="ft:gpt-4.1-mini-2025-04-14:globalflow:translation-ft-o3:CeKLQ1YB",
+    # model="gpt-4.1-mini",
     temperature=0.7,
     api_key=SecretStr(settings.OPENAI_API_KEY_3)
 )
@@ -141,7 +133,6 @@ sys.setrecursionlimit(3000)
 
 # ===================== HELPERS =====================
 def is_translateable(text: str) -> bool:
-
     unused = [
         "<strong style=\"text-transform:uppercase\">%{discount_rejection_message}</strong>",
         "%{product_name} / %{variant_label}",
@@ -316,88 +307,7 @@ def qdrant_examples(shopDomain, targetLanguage, user_id):
     end = datetime.now()
     print(
         f"Examples for fewshot retrieved from qdrant, time taken: {end-start}")
-    print("Qdrant Examples:", examples)
     return examples
-
-
-# def get_manual_examples(targetLanguage, targetCountry, max_examples=50):
-#     """
-#     Return a few-shot example set for a given language and country.
-#     If country-specific examples are missing, fallback to 'default' examples.
-#     """
-
-#     print(
-#         f"DEBUG: Looking for language='{targetLanguage}', country='{targetCountry}' (type: {type(targetCountry)})")
-
-#     lang_group = manual_examples.get(targetLanguage, {})
-#     print(
-#         f"DEBUG: Available keys in {targetLanguage}: {list(lang_group.keys())}")
-
-#     examples_set = lang_group.get(targetCountry)
-#     print(
-#         f"DEBUG: Direct match for '{targetCountry}': {'Found' if examples_set else 'Not found'}")
-#     # Load language group
-#     lang_group = manual_examples.get(targetLanguage, {})
-
-#     # Try country examples
-#     # examples_set = lang_group.get(targetCountry)
-
-#     examples_set = lang_group.get(
-#         targetCountry) or lang_group.get("default") or []
-#     examples_set = examples_set[:max_examples]
-
-#     # Fallback to default examples
-#     if not examples_set:
-#         examples_set = lang_group.get("default", [])
-
-#     # Limit examples
-#     examples_set = examples_set[:max_examples]
-
-#     # RETURN EXACT FORMAT REQUIRED BY FewShotPromptTemplate
-#     formatted_examples = [
-#         {
-#             "original": ex["original"],
-#             "translated": ex["translated"]
-#         }
-#         for ex in examples_set
-#     ]
-
-#     print(f"Examples for translation are: {formatted_examples}")
-
-#     return formatted_examples
-
-def get_manual_examples(targetLanguage, targetCountry, max_examples=150):
-    """
-    Return examples in the SAME STRUCTURE as qdrant_examples()
-    (batched JSON strings of 50 each).
-    """
-
-    lang_group = manual_examples.get(targetLanguage, {})
-
-    examples_set = lang_group.get(
-        targetCountry) or lang_group.get("default") or []
-
-    examples_set = examples_set[:max_examples]
-
-    # Split into batches of 50 (same as Qdrant format)
-    batches = [examples_set[i:i+50] for i in range(0, len(examples_set), 50)]
-
-    formatted_examples = []
-
-    for batch in batches:
-        original_list = [ex["original"] for ex in batch]
-        translated_list = [ex["translated"] for ex in batch]
-
-        formatted_examples.append(
-            {
-                "original": json.dumps(original_list, ensure_ascii=False),
-                "translated": json.dumps(translated_list, ensure_ascii=False)
-            }
-        )
-
-    print("MANUAL EXAMPLES:", formatted_examples)
-    return formatted_examples
-
 
 # ===================== TRANSLATION FUNCTIONS =====================
 
@@ -413,15 +323,9 @@ async def _translate_openai(strings, examples, user_id, shopDomain, target_lang,
         industry=industry,
         num_strings=len(strings),
     )
-    # query = TranslationQuery(
-    #     input=strings,
-    #     num_strings=len(strings),
-    #     industry=industry,
-    #     brandTone=brand_tone,
-    # )
 
-    content = await fewshotTranslation(examples, model, query, SafeJsonParser)
-    # content = await fewshotTranslationParallel(examples, query, SafeJsonParser, model)
+    # content = await fewshotTranslation(examples, model, query, SafeJsonParser)
+    content = await fewshotTranslationParallel(examples, query, SafeJsonParser, model)
 
     if isinstance(content, str):
         content = content.strip()
@@ -441,42 +345,6 @@ async def _translate_openai(strings, examples, user_id, shopDomain, target_lang,
         content_str = str(content)
         lines = [line for line in content_str.splitlines() if line.strip()]
         return [clean_line(line) for line in lines]
-
-
-# async def _translate_openai(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, model_obj, batch_num, type, provider):
-
-#     # Build prompt manually
-#     prompt = f"""
-#     You are a professional translator.
-#     Translate the following strings into {target_lang} (country: {targetCountry}).
-#     Brand tone: {brand_tone}
-#     Industry: {industry}
-#     Keep placeholders and HTML tags intact.
-#     Strings: {json.dumps(strings, ensure_ascii=False)}
-#     Return ONLY JSON array of translated strings.
-#     """
-
-#     # Use the OpenAI API directly from the model object
-#     # Each model_obj has api_key stored
-#     response = await openai.ChatCompletion.acreate(
-#         model=model_obj.model,
-#         messages=[{"role": "user", "content": prompt}],
-#         temperature=model_obj.temperature,
-#         api_key=model_obj.api_key.get_secret_value()
-#     )
-
-#     content = response.choices[0].message["content"]
-
-#     # Clean & parse
-#     content = re.sub(r"^```json\n?", "", content).strip()
-#     content = re.sub(r"```$", "", content).strip()
-
-#     try:
-#         data = json.loads(content)
-#         return [clean_line(x) for x in data]
-#     except Exception:
-#         # fallback: line by line
-#         return [clean_line(line) for line in content.splitlines() if line.strip()]
 
 
 async def translate_openai_1(strings, examples, user_id, shopDomain, target_lang, targetCountry, brand_tone, industry, batch_num, type, provider):
@@ -503,8 +371,8 @@ async def _translate_gemini(strings, examples, user_id, shopDomain, target_lang,
         num_strings=len(strings),
     )
 
-    content = await fewshotTranslation(examples, model, query, SafeJsonParser)
-    # content = await fewshotTranslationParallel(examples, query, SafeJsonParser, model)
+    # content = await fewshotTranslation(examples, model, query, SafeJsonParser)
+    content = await fewshotTranslationParallel(examples, query, SafeJsonParser, model)
 
     if isinstance(content, str):
         content = content.strip()
@@ -842,8 +710,7 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, tar
 
     start = datetime.now()
     translation_progress = {"valid": 0, "partial": 0, "total": total_batches}
-    # examples = qdrant_examples(shopDomain, target_lang, user_id)
-    examples = get_manual_examples(target_lang, targetCountry, max_examples=50)
+    examples = qdrant_examples(shopDomain, target_lang, user_id)
     translation_tasks = []
     logs = {}
 

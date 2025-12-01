@@ -13,8 +13,9 @@ class GenerateRequest(BaseModel):
     translation_id: int
     doc_type: str
     domain: str
-    country: str
-    language_pair: str
+    target_country: str
+    target_language: str
+    source_language: str
     preserve_legal_meaning: bool
     segments: List[Segment]
     glossary: Optional[List[str]] = []
@@ -26,13 +27,6 @@ class GenerateRequest(BaseModel):
         if not re.match(pattern, v):
             raise ValueError(
                 "Invalid domain format. Example: example.myshopify.com")
-        return v
-
-    @field_validator("language_pair")
-    def validate_language_pair(cls, v):
-        if not re.match(r"^[a-z]{2}-[a-z]{2}$", v.lower()):
-            raise ValueError(
-                "Invalid language_pair format. Use short codes like 'en-fr'.")
         return v
 
     @field_validator("segments")

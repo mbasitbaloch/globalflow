@@ -19,7 +19,7 @@ import hashlib
 import logging
 import asyncio
 import aiohttp
-from ..validator.countryValidator import validate_language_and_country
+from ..validator.countryValidator import validate_language
 
 logger = logging.getLogger("suggestion_engine")
 
@@ -34,9 +34,10 @@ def _sha1(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
 
-def default_style_pack(language_pair: str, domain: str, country: str) -> dict:
+def default_style_pack(target_language: str, source_language: str, domain: str, country: str) -> dict:
     return {
-        "language_pair": language_pair,
+        "target_language": target_language,
+        "source_language": source_language,
         "domain": domain,
         "country": country,
         "tone": "neutral",
@@ -49,13 +50,14 @@ def default_style_pack(language_pair: str, domain: str, country: str) -> dict:
 # ----------------- Load Tenant Style Pack -----------------
 
 
-def load_style_pack(tenant_id: str, language_pair: str, domain: str, country: str) -> dict:
+def load_style_pack(tenant_id: str, target_language: str, source_language: str, domain: str, country: str) -> dict:
     cached = get_stylepack_from_cache(
-        tenant_id, language_pair, domain, country)
+        tenant_id, target_language, source_language, domain, country)
     if cached:
         return cached
-    style_pack = default_style_pack(language_pair, domain, country)
-    set_stylepack_in_cache(tenant_id, language_pair,
+    style_pack = default_style_pack(
+        target_language, source_language, domain, country)
+    set_stylepack_in_cache(tenant_id, target_language, source_language,
                            domain, country, style_pack)
     return style_pack
 
@@ -149,7 +151,8 @@ async def meaning_shift_risk(original: str, candidate: str, doc_type: str) -> Tu
 async def generate_candidate_suggestions(
     segment_text: str,
     style_pack: dict,
-    language_pair: str,
+    target_language: str,
+    source_language: str,
     target_country: str,
     doc_type: str,
     n: int = 4,
@@ -213,7 +216,8 @@ async def generate_candidate_suggestions(
 
         Text: {segment_text}
         Generate exactly 4 improvement suggestions, one for each of: grammar, fluency, style, idioms.
-        - Language pair: {language_pair}
+        - Source language: {source_language}
+        - Target language: {target_language}
         - Country: {target_country}
         - Document type: {doc_type}
         - Preserve the exact meaning, especially legal/contractual terms.
@@ -237,7 +241,8 @@ async def generate_candidate_suggestions(
     fallback_prompt = f"""
             Text: {segment_text}
             Generate exactly 4 improvement suggestions, one for each of: grammar, fluency, style, idioms.
-            - Language pair: {language_pair}
+            - Source language: {source_language}
+            - Target language: {target_language}
             - Country: {target_country}
             - Document type: {doc_type}
             - Preserve the exact meaning, especially legal/contractual terms.
@@ -370,14 +375,16 @@ async def produce_suggestions(
     doc_type: str,
     domain: str,
     country: str,
-    language_pair: str,
+    target_language: str,
+    source_language: str,
     preserve_legal_meaning: bool,
     segments: List[Dict[str, Any]],
     glossary: List[str] = None,
     compliance_patterns: List[str] = None
 ) -> Dict[str, Any]:
 
-    style_pack = load_style_pack(tenant_id, language_pair, domain, country)
+    style_pack = load_style_pack(
+        tenant_id, target_language, source_language, domain, country)
     glossary = glossary or style_pack.get("do_not_change", []) or []
     compliance_patterns = compliance_patterns or []
     aggregated_suggestions = []
@@ -394,11 +401,7 @@ async def produce_suggestions(
         #     return {"path": path, "original": text, "suggestions": cached["suggestions"], "scores": cached.get("scores", {})}
 
         # Validate language and country
-        valid, validation_msg = validate_language_and_country(
-            language_pair,
-            country,
-            text  # Pass the text string directly
-        )
+        valid, validation_msg = validate_language(source_language, text)
         if not valid:
             logger.error(f"Validation failed for {path}: {validation_msg}")
             # Should not reach here due to early validation
@@ -407,7 +410,8 @@ async def produce_suggestions(
         candidates = await generate_candidate_suggestions(
             segment_text=text,
             style_pack=style_pack,
-            language_pair=language_pair,
+            source_language=source_language,
+            target_language=target_language,
             target_country=country,
             doc_type=doc_type,
             n=4
@@ -461,7 +465,7 @@ async def produce_suggestions(
             "generated_at": datetime.utcnow().isoformat()
         }
         set_suggestions_in_cache(
-            tenant_id, language_pair, domain, text, payload)
+            tenant_id, source_language, target_language, domain, text, payload)
         # , "scores": segment_scores
         return {"path": path, "original": text, "suggestions": final}
 

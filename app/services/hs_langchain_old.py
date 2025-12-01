@@ -1,4 +1,3 @@
-import os
 from langchain_core.prompts import PromptTemplate, FewShotPromptTemplate  # type: ignore
 from app.config import settings
 from dataclasses import dataclass
@@ -6,17 +5,6 @@ from langchain_core.output_parsers import JsonOutputParser, BaseOutputParser
 from typing import List
 import json
 import re
-from openai import OpenAI
-import asyncio
-from functools import partial
-from pydantic import BaseModel
-from langchain_core.prompts import PromptTemplate, FewShotPromptTemplate
-from langchain_core.output_parsers import BaseOutputParser
-
-
-class Translations(BaseModel):
-    translations: list[str]
-
 
 # CLASSIFICATION FEWSHOT EXAMPLES
 
@@ -391,230 +379,209 @@ voting_examples = [
 ]
 
 
-# TRANSLATION FEWSHOT EXAMPLES (Egyptian Arabic - EG)
-
-translation_examples_eg = [
-    {"original": "Stainless Steel Travel Mug",
-        "translated": "كوباية سفر من الستانلس ستيل"},
-    {"original": "Keep your drinks hot or cold",
-        "translated": "خلي مشروباتك سخنة أو ساقعة"},
-    {"original": "Hello", "translated": "أهلاً"},
-    {"original": "Thank you", "translated": "متشكر"},
-    {"original": "How are you?", "translated": "إزيك؟"},
-    {"original": "Portable Vaneless Neck Hanging Fan – Rechargeable, Silent & Hands-Free Cooling for Summer",
-     "translated": "مروحة رقبة بدون ريشة، بتتعلق على الرقبة – قابلة لإعادة الشحن، هادية وبلا ما تستخدم إيديك للتبريد في الصيف"},
-    {"original": "<p>Keep your drinks hot or cold for hours with this durable Stainless Steel Travel Mug.</p>",
-     "translated": "خلي مشروباتك سخنة أو ساقعة لساعات مع الكوباية دي المصنوعة من الستانلس ستيل القوي."},
-    {"original": "Enter a valid ZIP / postal code for %{country}",
-        "translated": "اكتب رمز بريد صحيح لـ %{country}"},
-    {"original": "This order will be shipped to the address provided by {{merchant}}.",
-        "translated": "الطلب ده هيتم شحنه على العنوان اللي مدونه {{merchant}}."},
-    {"original": "{{partnerDisplayName}} Terms and Conditions",
-        "translated": "شروط وأحكام {{partnerDisplayName}}"},
-    {"original": "Today at {{time}}", "translated": "النهاردة الساعة {{time}}"},
-    # add as many as you want – the more the better
-]
-
 # FEWSHOT METHODS
 
+async def promptClassification(classification_model, strings_batch):
+    example_template = """
+    Strings: {strings}
+    Labels: {labels}
+    """
 
-# async def promptClassification(classification_model, strings_batch):
-#     example_template = """
-#     Strings: {strings}
-#     Labels: {labels}
-#     """
+    example_prompt = PromptTemplate(
+        input_variables=["strings", "labels"],
+        template=example_template,
+    )
 
-#     example_prompt = PromptTemplate(
-#         input_variables=["strings", "labels"],
-#         template=example_template,
-#     )
+    fewshot_prompt = FewShotPromptTemplate(
+        example_prompt=example_prompt,
+        examples=classification_examples,
+        # prefix = """ You are a strict text classifier.
 
-#     fewshot_prompt = FewShotPromptTemplate(
-#         example_prompt=example_prompt,
-#         examples=classification_examples,
-#         # prefix = """ You are a strict text classifier.
+        # Categories:
+        # - "business" = official, legal, contractual, financial, invoices, policies, compliance, formal system messages.
+        # - "ordinary" = product marketing, casual phrases, blogs, general UI text, everyday communication.
+        # Never invent new categories; only use "business" or "ordinary".
 
-#         # Categories:
-#         # - "business" = official, legal, contractual, financial, invoices, policies, compliance, formal system messages.
-#         # - "ordinary" = product marketing, casual phrases, blogs, general UI text, everyday communication.
-#         # Never invent new categories; only use "business" or "ordinary".
+        # Rules:
+        # - Classify each string into exactly ONE category.
+        # - The number of output labels MUST equal the number of input strings ({num_strings}).
+        # - Keep the order of outputs identical to the order of inputs.
 
-#         # Rules:
-#         # - Classify each string into exactly ONE category.
-#         # - The number of output labels MUST equal the number of input strings ({num_strings}).
-#         # - Keep the order of outputs identical to the order of inputs.
+        # Now classify these {num_strings} strings:
+        # {strings_batch}
 
-#         # Now classify these {num_strings} strings:
-#         # {strings_batch}
+        # IMPORTANT:
+        # Respond with ONLY a valid JSON array of {num_strings} strings. No extra text.
+        # """,
+        prefix="""
+        You are a strict JSON-based text classifier.
 
-#         # IMPORTANT:
-#         # Respond with ONLY a valid JSON array of {num_strings} strings. No extra text.
-#         # """,
-#         prefix="""
-#         You are a strict JSON-based text classifier.
+        ### Categories
+        - **"business"** → official, legal, contractual, financial, invoices, policies, compliance, or other formal system messages.
+        - **"ordinary"** → marketing, product descriptions, blogs, general UI text, or casual communication.
 
-#         ### Categories
-#         - **"business"** → official, legal, contractual, financial, invoices, policies, compliance, or other formal system messages.
-#         - **"ordinary"** → marketing, product descriptions, blogs, general UI text, or casual communication.
+        ### Instructions
+        - Classify each string into **exactly one** of the above categories.
+        - Do **not** invent new labels.
+        - The number of outputs MUST equal the number of input strings ({num_strings}).
+        - Preserve the **exact same order** as the input.
+        - Each output element must be a **two-item array**:  
+        `[text, label]`
+        - Output must be **valid JSON** — no extra text, no comments, no markdown.
 
-#         ### Instructions
-#         - Classify each string into **exactly one** of the above categories.
-#         - Do **not** invent new labels.
-#         - The number of outputs MUST equal the number of input strings ({num_strings}).
-#         - Preserve the **exact same order** as the input.
-#         - Each output element must be a **two-item array**:
-#         `[text, label]`
-#         - Output must be **valid JSON** — no extra text, no comments, no markdown.
+        ### Input Strings
+        {strings_batch}
 
-#         ### Input Strings
-#         {strings_batch}
+        ### Expected Output Format
+        [
+        ["<original_text_1>", "business" or "ordinary"],
+        ["<original_text_2>", "business" or "ordinary"],
+        ...
+        ]
 
-#         ### Expected Output Format
-#         [
-#         ["<original_text_1>", "business" or "ordinary"],
-#         ["<original_text_2>", "business" or "ordinary"],
-#         ...
-#         ]
+        Now classify and respond with **only** the JSON array — nothing else.
+        """,
+        suffix="Strings:\n{strings_batch}\nLabels:",
+        input_variables=["strings_batch", "num_strings"],
+    )
 
-#         Now classify and respond with **only** the JSON array — nothing else.
-#         """,
-#         suffix="Strings:\n{strings_batch}\nLabels:",
-#         input_variables=["strings_batch", "num_strings"],
-#     )
+    chain = fewshot_prompt | classification_model | SafeJsonParser()
+    response = await chain.ainvoke({
+        "strings_batch": json.dumps(strings_batch, ensure_ascii=False),
+        "num_strings": len(strings_batch)
+    })
 
-#     chain = fewshot_prompt | classification_model | SafeJsonParser()
-#     response = await chain.ainvoke({
-#         "strings_batch": json.dumps(strings_batch, ensure_ascii=False),
-#         "num_strings": len(strings_batch)
-#     })
+    try:
+        labels = json.loads(response)
+    except Exception:
+        labels = response
 
-#     try:
-#         labels = json.loads(response)
-#     except Exception:
-#         labels = response
+    clean_labels = []
+    for l in labels:
+        if isinstance(l, list):
+            label = l[1]
+            if isinstance(label, str):
+                clean_labels.append(label.strip().lower())
 
-#     clean_labels = []
-#     for l in labels:
-#         if isinstance(l, list):
-#             label = l[1]
-#             if isinstance(label, str):
-#                 clean_labels.append(label.strip().lower())
+    return clean_labels
 
-#     return clean_labels
-
-#     # return response
-#     # return [x.strip().lower() for x in response]
+    # return response
+    # return [x.strip().lower() for x in response]
 
 
-# async def voteClassification(model, strings_batch):
-#     example_template = """
-#     Pairs: {pairs}
-#     Votes: {votes}
-#     """
+async def voteClassification(model, strings_batch):
+    example_template = """
+    Pairs: {pairs}
+    Votes: {votes}
+    """
 
-#     example_prompt = PromptTemplate(
-#         input_variables=["pairs", "votes"],
-#         template=example_template,
-#     )
+    example_prompt = PromptTemplate(
+        input_variables=["pairs", "votes"],
+        template=example_template,
+    )
 
-#     fewshot_prompt = FewShotPromptTemplate(
-#         example_prompt=example_prompt,
-#         examples=voting_examples,
-#         #         prefix="""
-#         # You are a *strict JSON verifier* for text category assignments.
+    fewshot_prompt = FewShotPromptTemplate(
+        example_prompt=example_prompt,
+        examples=voting_examples,
+        #         prefix="""
+        # You are a *strict JSON verifier* for text category assignments.
 
-#         # ### Categories
-#         # - **business** → official, legal, financial, invoice, compliance, government, or formal system text.
-#         # - **ordinary** → marketing, social, everyday, blog, UI, or casual communication.
+        # ### Categories
+        # - **business** → official, legal, financial, invoice, compliance, government, or formal system text.
+        # - **ordinary** → marketing, social, everyday, blog, UI, or casual communication.
 
-#         # ### Task
-#         # Each input pair is formatted as `[text, assigned_label]`.
-#         # Decide if the label is logically correct **based only** on the category rules above.
+        # ### Task
+        # Each input pair is formatted as `[text, assigned_label]`.
+        # Decide if the label is logically correct **based only** on the category rules above.
 
-#         # ### Output Requirements
-#         # - Return a **JSON array of booleans** (`true` or `false`).
-#         # - The **array length MUST equal {num_pairs}** (one per input).
-#         # - Maintain **exact same order** as input.
-#         # - **No extra text, comments, or formatting** outside the array.
-#         # - **No skipped or merged items.**
+        # ### Output Requirements
+        # - Return a **JSON array of booleans** (`true` or `false`).
+        # - The **array length MUST equal {num_pairs}** (one per input).
+        # - Maintain **exact same order** as input.
+        # - **No extra text, comments, or formatting** outside the array.
+        # - **No skipped or merged items.**
 
-#         # If any pair is ambiguous, return `false` (do not guess).
+        # If any pair is ambiguous, return `false` (do not guess).
 
-#         # Now verify exactly {num_pairs} pairs below and return a JSON array of {num_pairs} booleans.
-#         # Pairs:
-#         # {pairs}
+        # Now verify exactly {num_pairs} pairs below and return a JSON array of {num_pairs} booleans.
+        # Pairs:
+        # {pairs}
 
-#         # Respond with **only** the JSON array, nothing else.
-#         # """,
-#         prefix="""
-#         You are a *strict JSON verifier* for text category assignments.
+        # Respond with **only** the JSON array, nothing else.
+        # """,
+        prefix="""
+        You are a *strict JSON verifier* for text category assignments.
 
-#         ### Categories
-#         - **business** → official, legal, financial, invoice, compliance, government, or formal system text.
-#         - **ordinary** → marketing, social, everyday, blog, UI, or casual communication.
+        ### Categories
+        - **business** → official, legal, financial, invoice, compliance, government, or formal system text.
+        - **ordinary** → marketing, social, everyday, blog, UI, or casual communication.
 
-#         ### Task
-#         Each input pair is formatted as `[text, assigned_label]`.
-#         Decide if the label is logically correct **based only** on the category rules above.
+        ### Task
+        Each input pair is formatted as `[text, assigned_label]`.
+        Decide if the label is logically correct **based only** on the category rules above.
 
-#         ### Output Format
-#         Return a **JSON array** where each element is:
-#             [text, assigned_label, vote]
+        ### Output Format
+        Return a **JSON array** where each element is:
+            [text, assigned_label, vote]
 
-#         Output must be a **valid JSON array**, strictly following JSON syntax rules:
-#         - `vote` is `true` if the label is logically correct, otherwise `false`.
-#         - Maintain **exact same order** as input.
-#         - The **array length MUST equal {num_pairs}**.
-#         - **No extra text, comments, or formatting** outside the array.
-#         - **No skipped or merged items.**
-#         - If any pair is ambiguous, return `false` for that item.
+        Output must be a **valid JSON array**, strictly following JSON syntax rules:
+        - `vote` is `true` if the label is logically correct, otherwise `false`.
+        - Maintain **exact same order** as input.
+        - The **array length MUST equal {num_pairs}**.
+        - **No extra text, comments, or formatting** outside the array.
+        - **No skipped or merged items.**
+        - If any pair is ambiguous, return `false` for that item.
 
-#         Now verify exactly {num_pairs} pairs below and return a JSON array of {num_pairs} triplets.
-#         Pairs:
-#         {pairs}
+        Now verify exactly {num_pairs} pairs below and return a JSON array of {num_pairs} triplets.
+        Pairs:
+        {pairs}
 
-#         Respond with **only** the JSON array, nothing else.
-#         """,
-#         suffix="Pairs:\n{pairs}\nVotes:",
-#         input_variables=["pairs", "num_pairs"],
-#     )
+        Respond with **only** the JSON array, nothing else.
+        """,
+        suffix="Pairs:\n{pairs}\nVotes:",
+        input_variables=["pairs", "num_pairs"],
+    )
 
-#     chain = fewshot_prompt | model | SafeJsonParser()
-#     response = await chain.ainvoke({
-#         "pairs": json.dumps(strings_batch, ensure_ascii=False),
-#         "num_pairs": len(strings_batch)
-#     })
+    chain = fewshot_prompt | model | SafeJsonParser()
+    response = await chain.ainvoke({
+        "pairs": json.dumps(strings_batch, ensure_ascii=False),
+        "num_pairs": len(strings_batch)
+    })
 
-#     # return response
-#     # return [x.strip().lower() for x in response]
-#     try:
-#         votes = json.loads(response)
-#     except Exception:
-#         votes = response
+    # return response
+    # return [x.strip().lower() for x in response]
+    try:
+        votes = json.loads(response)
+    except Exception:
+        votes = response
 
-#     # print(votes)
+    # print(votes)
 
-#     clean_votes = []
-#     for v in votes:
-#         if isinstance(v, list):
-#             vote = v[2]
-#             if isinstance(vote, bool):
-#                 clean_votes.append(vote)
-#             elif isinstance(vote, str):
-#                 vote = vote.strip().lower()
-#                 if vote == "true":
-#                     clean_votes.append(True)
-#                 if vote == "false":
-#                     clean_votes.append(False)
-#                 # clean_votes.append(vote.strip().lower() == "true")
-#             # else:
-#             #     # Unexpected type → default to False
-#             #     clean_votes.append(True)
+    clean_votes = []
+    for v in votes:
+        if isinstance(v, list):
+            vote = v[2]
+            if isinstance(vote, bool):
+                clean_votes.append(vote)
+            elif isinstance(vote, str):
+                vote = vote.strip().lower()
+                if vote == "true":
+                    clean_votes.append(True)
+                if vote == "false":
+                    clean_votes.append(False)
+                # clean_votes.append(vote.strip().lower() == "true")
+            # else:
+            #     # Unexpected type → default to False
+            #     clean_votes.append(True)
 
-#     return clean_votes
+    return clean_votes
 
 
 async def fewshotTranslation(examples, model, query, SafeJsonParser):
+    example_template = """
+    Original: {original}
+    Translated: {translated}
+    """
 
     # Map target country → translation style/tone
     country_to_style = {
@@ -622,22 +589,16 @@ async def fewshotTranslation(examples, model, query, SafeJsonParser):
         "saudi": "Saudi local Arabic",
         "france": "France French ",
         "canada": "canadian local French (Quebec French for Canada)",
-        "":   "Spain Spanish (Castilian / Español de España)",
-        "": "Mexican Spanish (Español de México).",
-        "":    "Argentinian Spanish(Español Rioplatense)."
+        "spain": "Spain Spanish (Castilian / Español de España)",
+        "mexico": "Mexican Spanish (Español de México).",
+        "argentina": "Argentinian Spanish(Español Rioplatense).",
     }
     style = country_to_style.get(
         query.targetCountry.lower(), "natural, localized tone"
     )
     print(f"style for country is: {style}")
 
-    example_template = """
-    Original: {original}
-    Translated: {translated}
-    """
-
     # print("Example template is created!")
-
     example_prompt = PromptTemplate(
         input_variables=["original", "translated"],
         template=example_template,
@@ -648,23 +609,24 @@ async def fewshotTranslation(examples, model, query, SafeJsonParser):
     fewshot_prompt = FewShotPromptTemplate(
         example_prompt=example_prompt,
         examples=examples,
-        prefix=f"""
+        prefix="""
         You are a professional translator specializing in {style}.
 
         Task:
-        Translate the following {query.num_strings} strings into {query.targetLanguage} usig this {style}.
-        - Maintain the brand tone as '{query.brandTone}'.
-        - Adapt translations to the industrial domain '{query.industry}'.
+        Translate the following {num_strings} strings into {targetLanguage}.
+        - Maintain the brand tone as '{brandTone}'.
+        - Adapt translations to the industrial domain '{industry}'.
           Use terminology, phrasing, and style that are natural and widely used in this domain.
         - If a string contains HTML tags (<p>, <div>, <br>, etc.), KEEP the tags unchanged, only translate the inner text.
+        - Preserve placeholders (e.g., {{name}}, %s, {{0}}) exactly as they are. Translate surrounding text but do NOT translate or modify the text inside placeholders.
         - Do NOT merge, omit, or add strings.
         - Translate long texts fully (no summarization).
-        - Language code rule: if a string is a language code (e.g., "en"), replace it with the correct code for {query.targetLanguage}.
-        Example: "en" → "fr" when {query.targetLanguage} is French.
+        - Language code rule: if a string is a language code (e.g., "en"), replace it with the correct code for {targetLanguage}.
+        Example: "en" → "fr" when {targetLanguage} is French.
 
 
         ### Country & Localization Rule
-        Always adapt translations to the **regional variant** of {query.targetLanguage} used in **{query.targetCountry}**. Use the natural tone, vocabulary, and phrasing typical for that region.
+        Always adapt translations to the **regional variant** of {targetLanguage} used in **{targetCountry}**. Use the natural tone, vocabulary, and phrasing typical for that region.
         - Adjust tone, spelling, vocabulary, and idioms to sound natural in that region.
         - Follow these examples for guidance:
             - English (US): "color", "customize" — friendly, direct tone.
@@ -678,25 +640,26 @@ async def fewshotTranslation(examples, model, query, SafeJsonParser):
             - Urdu (India): Indian Urdu with Hindi-influenced vocabulary.
             - Spanish (Spain): Castilian tone ("vosotros").
             - Spanish (Mexico): Latin American tone ("ustedes").
-            - If the country’s language has multiple local varieties, choose the most **commonly used** written form for {query.targetCountry}.
+            - If the country’s language has multiple local varieties, choose the most **commonly used** written form for {targetCountry}.
         If unsure, choose the most natural and commonly used phrasing for that country.
 
 
         ### Style & Consistency
-        - Maintain the brand tone as **'{query.brandTone}'**.
-        - Adapt to the industrial domain **'{query.industry}'**, using terminology and phrasing common in that field.
-        - Ensure fluency and natural flow — the translation should read as if it were originally written by a native speaker from {query.targetCountry}.
+        - Maintain the brand tone as **'{brandTone}'**.
+        - Adapt to the industrial domain **'{industry}'**, using terminology and phrasing common in that field.
+        - Ensure fluency and natural flow — the translation should read as if it were originally written by a native speaker from {targetCountry}.
 
         ### Technical Rules
         - Preserve HTML tags (<p>, <div>, <br>, etc.) exactly; translate only the inner text.
+        - Preserve placeholders (e.g., {{name}}, %s, {{0}}) — do NOT translate or modify text inside them.
         - Do NOT merge, omit, or add strings.
         - Translate full sentences — no summaries.
-        - Language code rule: if a string is a language code (e.g., "en"), replace it with the correct code for {query.targetLanguage}.
+        - Language code rule: if a string is a language code (e.g., "en"), replace it with the correct code for {targetLanguage}.
 
 
         Output requirements:
         - Return ONLY valid JSON.
-        - JSON must be an array of exactly {query.num_strings} strings.
+        - JSON must be an array of exactly {num_strings} strings.
         - Order must match the input order.
         - No comments, no explanations, no extra text.
 
@@ -711,12 +674,9 @@ async def fewshotTranslation(examples, model, query, SafeJsonParser):
         ]
         """,
         suffix="Source:\n{input}\nTranslated:",
-        input_variables=["input"],
+        input_variables=["input", "targetLanguage", "targetCountry",
+                         "brandTone", "industry", "num_strings", "style"],
     )
-
-    # - Preserve placeholders(e.g., {{name}}, % s, {{0}}) exactly as they are. Translate surrounding text but do NOT translate or modify the text inside placeholders.
-    #     - Preserve placeholders (e.g., {{name}}, %s, {{0}}) — do NOT translate or modify text inside them.
-    # Do NOT remove, modify, interpret, or translate any placeholders such as:%{{province}}, %{{merchant}}, {{time}}, {{partnerDisplayName}}.Keep them EXACTLY as they are.
 
     # print("Expected variables:", fewshot_prompt.input_variables)
 
@@ -734,163 +694,18 @@ async def fewshotTranslation(examples, model, query, SafeJsonParser):
     #     num_strings=len(query.input),
     # )
     # print(" Final Prompt Sent to Model:\n", formatted_prompt)
-    # print(f"data in query is: {query}".format(query=query))
 
     response = await chain.ainvoke({
-        "input": json.dumps(input_text, ensure_ascii=False)
-        # "targetLanguage": query.targetLanguage,
-        # "targetCountry": query.targetCountry,
-        # "brandTone": query.brandTone,
-        # "industry": query.industry,
-        # "num_strings": len(input_text),
+        "input": json.dumps(input_text, ensure_ascii=False),
+        "targetLanguage": query.targetLanguage,
+        "targetCountry": query.targetCountry,
+        "brandTone": query.brandTone,
+        "industry": query.industry,
+        "num_strings": len(input_text),
+        "style":style
     })
 
     return response
-
-
-async def fewshotTranslationParallelOld(examples, query, SafeJsonParser, model):
-    """
-    This is a replacement for fewshotTranslation.
-    Uses multiple OpenAI API keys + models in parallel (round-robin).
-    Returns a response compatible with _translate_openai processing logic.
-    """
-
-    if model is None:
-        model = os.getenv("OPENAI_API_KEY_1_MODEL")
-
-    # Load clients and models from environment
-    CLIENTS = [
-        OpenAI(api_key=os.getenv("OPENAI_API_KEY_1")),
-        OpenAI(api_key=os.getenv("OPENAI_API_KEY_2")),
-        OpenAI(api_key=os.getenv("OPENAI_API_KEY_3")),
-    ]
-
-    MODELS = [
-        os.getenv("OPENAI_API_KEY_1_MODEL"),
-        os.getenv("OPENAI_API_KEY_2_MODEL"),
-        os.getenv("OPENAI_API_KEY_3_MODEL"),
-    ]
-
-    # Determine style based on query.targetCountry or your mapping
-    country_to_style = {
-        "egypt": "Egyptian Arabic tone",
-        "saudi": "Saudi Arabic",
-        "france": "France French"
-    }
-
-    style = country_to_style.get(
-        query.targetCountry.lower(), "Standard Translation")
-
-    async def translate_single(text: str, client: OpenAI, model: str):
-        # Create prompt for single string
-        prompt = f"""
-        Translate this text into {style}.
-        Text: {text}
-        """
-
-        response = await asyncio.to_thread(
-            client.chat.completions.create,
-            model=model,
-            messages=[
-                {"role": "system",
-                    "content": f"You are a professional translator for {style}."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-
-        # Return raw content
-        return response.choices[0].message.content
-
-    # Assign tasks round-robin across clients/models
-    tasks = []
-    for i, text in enumerate(query.input):
-        client = CLIENTS[i % len(CLIENTS)]
-        model = MODELS[i % len(MODELS)]
-        tasks.append(translate_single(text, client, model))
-
-    # Gather all results in parallel
-    results = await asyncio.gather(*tasks)
-
-    # Convert to the same "fewshotTranslation" style string
-    # i.e., JSON array of strings
-    return json.dumps(results, ensure_ascii=False)
-
-
-async def fewshotTranslationParallel(examples, query, SafeJsonParser, llm):
-    """
-    Few-shot translation with localization and brand/industry adaptation.
-    Uses langchain_core PromptTemplate and FewShotPromptTemplate.
-    Assumes llm is already an initialized LangChain LLM (dynamic model passed in).
-    """
-
-    # Map target country → translation style/tone
-    country_to_style = {
-        "egypt": "Egyptian Arabic tone",
-        "saudi": "Saudi local Arabic",
-        "france": "France French ",
-        "canada": "canadian local French (Quebec French for Canada)",
-        "spain": "Spain Spanish (Castilian / Español de España)",
-        "mexico": "Mexican Spanish (Español de México).",
-        "argentina": "Argentinian Spanish(Español Rioplatense).",
-    }
-    country_raw = getattr(query, "targetCountry", None) or getattr(
-        query, "targetcountry", None)
-    style = country_to_style.get(
-        country_raw.lower(), "natural, localized tone")
-    print(f"style for country is: {style}")
-
-    # Example template for few-shot
-    example_template = """
-    Original: {original}
-    Translated: {translated}
-    """
-    example_prompt = PromptTemplate(
-        input_variables=["original", "translated"],
-        template=example_template,
-    )
-
-    # Few-shot prompt with localization rules
-    fewshot_prompt = FewShotPromptTemplate(
-        example_prompt=example_prompt,
-        examples=examples,
-        prefix=f"""
-You are a professional translator specializing in {style}.
-    Translate the following {len(query.input)} strings into {query.targetLanguage} as spoken locally in {query.targetCountry}.
-
-Localization Rules:
-- Preserve the brand tone: '{query.brandTone}'
-- Adapt translations to the industry/domain: '{query.industry}'
-- Apply regional linguistic norms for {query.targetCountry}:
-   - {query.targetCountry} grammar rules
-   - {query.targetCountry} vocabulary choices commonly used by native speakers
-   - {query.targetCountry} tone & phrasing style
-   - Full {query.targetCountry} cultural & linguistic localization
-The translation must sound 100% natural and native to {query.targetCountry} speakers.
-
-Rules:
-- Maintain the brand tone: '{query.brandTone}'
-- Adapt translations to the industrial domain: '{query.industry}'
-- Follow regional localization for {query.targetCountry} (vocabulary, tone, idioms)
-- Preserve HTML tags (<p>, <div>, <br>, etc.) exactly; translate only the inner text.
-- Do NOT merge, omit, or add strings
-- Translate full sentences (no summaries)
-- Output MUST be fully localized — NEVER partial localization.
-
-Return EXACTLY a JSON array with the translated strings in the same order.
-""",
-        suffix="Source strings:\n{input}\nTranslated strings:",
-        input_variables=["input"]
-    )
-
-    # Use the passed-in LLM directly (no reinitialization)
-    chain = fewshot_prompt | llm | SafeJsonParser()
-
-    # Invoke asynchronously
-    output = await chain.ainvoke({
-        "input": json.dumps(query.input, ensure_ascii=False)
-    })
-
-    return output
 
 
 @dataclass
@@ -974,72 +789,3 @@ class SafeJsonParser(BaseOutputParser):
             except Exception as e2:
                 raise ValueError(
                     f"❌ Failed to parse sanitized JSON: {e2}\nRaw: {text[:500]}")
-
-
-# SafeJsonParser = SafeJsonParser()
-
-# # prefix="""
-# You are a professional translator.
-
-# Task:
-# Translate the following {num_strings} strings into {targetLanguage}.
-# - Maintain the brand tone as '{brandTone}'.
-# - Adapt translations to the industrial domain '{industry}'.
-#   Use terminology, phrasing, and style that are natural and widely used in this domain.
-# - If a string contains HTML tags (<p>, <div>, <br>, etc.), KEEP the tags unchanged, only translate the inner text.
-# - Preserve placeholders (e.g., {{name}}, %s, {{0}}) exactly as they are. Translate surrounding text but do NOT translate or modify the text inside placeholders.
-# - Do NOT merge, omit, or add strings.
-# - Translate long texts fully (no summarization).
-# - Language code rule: if a string is a language code (e.g., "en"), replace it with the correct code for {targetLanguage}.
-# Example: "en" → "fr" when {targetLanguage} is French.
-
-# ### Country & Localization Rule
-# Always adapt translations to the **regional variant** of {targetLanguage} used in **{targetCountry}**. Use the natural tone, vocabulary, and phrasing typical for that region.
-# - Adjust tone, spelling, vocabulary, and idioms to sound natural in that region.
-# - Follow these examples for guidance:
-#     - English (US): "color", "customize" — friendly, direct tone.
-#     - English (UK): "colour", "customise" — formal, polite tone.
-#     - English (India): mix of British spelling + Indian idioms.
-#     - French (France): standard European French expressions.
-#     - French (Canada): Québécois tone and local phrasing.
-#     - Arabic (Egypt): colloquial Egyptian Arabic (العامية المصرية) for general content.
-#     - Arabic (Saudi Arabia): Gulf Arabic tone (الفصحى الخليجية) for general content.
-#     - Urdu (Pakistan): Pakistani-style expressions, Arabic loanwords preferred.
-#     - Urdu (India): Indian Urdu with Hindi-influenced vocabulary.
-#     - Spanish (Spain): Castilian tone ("vosotros").
-#     - Spanish (Mexico): Latin American tone ("ustedes").
-#     - If the country’s language has multiple local varieties, choose the most **commonly used** written form for {targetCountry}.
-# If unsure, choose the most natural and commonly used phrasing for that country.
-
-# ### Style & Consistency
-# - Maintain the brand tone as **'{brandTone}'**.
-# - Adapt to the industrial domain **'{industry}'**, using terminology and phrasing common in that field.
-# - Ensure fluency and natural flow — the translation should read as if it were originally written by a native speaker from {targetCountry}.
-
-# ### Technical Rules
-# - Preserve HTML tags (<p>, <div>, <br>, etc.) exactly; translate only the inner text.
-# - Preserve placeholders (e.g., {{name}}, %s, {{0}}) — do NOT translate or modify text inside them.
-# - Do NOT merge, omit, or add strings.
-# - Translate full sentences — no summaries.
-# - Language code rule: if a string is a language code (e.g., "en"), replace it with the correct code for {targetLanguage}.
-
-# Output requirements:
-# - Return ONLY valid JSON.
-# - JSON must be an array of exactly {num_strings} strings.
-# - Order must match the input order.
-# - No comments, no explanations, no extra text.
-
-# Input strings:
-# {input}
-
-# Output format (strict):
-# [
-# "translation of string 1",
-# "translation of string 2",
-# ...
-# ]
-# """,
-
-# suffix="Source:\n{input}\nTranslated:",
-# input_variables=["input", "targetLanguage", "targetCountry",
-#                  "brandTone", "industry", "num_strings"],
