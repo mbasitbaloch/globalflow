@@ -824,15 +824,111 @@ async def fewshotTranslationParallel(examples, query, SafeJsonParser, llm):
     """
 
     # Map target country → translation style/tone
+    # country_to_style = {
+    #     "egypt": "Egyptian Arabic tone",
+    #     "saudi": "Saudi local Arabic",
+    #     "france": "France French ",
+    #     "canada": "canadian local French (Quebec French for Canada)",
+    #     "spain": "Spain Spanish (Castilian / Español de España)",
+    #     "mexico": "Mexican Spanish (Español de México).",
+    #     "argentina": "Argentinian Spanish(Español Rioplatense).",
+    # }
+
     country_to_style = {
-        "egypt": "Egyptian Arabic tone",
-        "saudi": "Saudi local Arabic",
-        "france": "France French ",
-        "canada": "canadian local French (Quebec French for Canada)",
+        "united states": "American English (US tone, vocabulary & phrasing)",
+        "us": "American English (US tone, vocabulary & phrasing)",
+
+        "united kingdom": "British English (UK tone, idioms & phrasing)",
+        "gb": "British English (UK tone, idioms & phrasing)",
+
+        "canada": "Canadian English / Quebec French tone depending on target language",
+        "ca": "Canadian English / Quebec French tone depending on target language",
+
         "spain": "Spain Spanish (Castilian / Español de España)",
-        "mexico": "Mexican Spanish (Español de México).",
-        "argentina": "Argentinian Spanish(Español Rioplatense).",
+        "es": "Spain Spanish (Castilian / Español de España)",
+
+        "mexico": "Mexican Spanish (Español de México)",
+        "mx": "Mexican Spanish (Español de México)",
+
+        "argentina": "Argentinian Spanish (Español Rioplatense)",
+        "ar": "Argentinian Spanish (Español Rioplatense)",
+
+        "france": "European French (France French, natural Parisian tone)",
+        "fr": "European French (France French, natural Parisian tone)",
+
+        "germany": "German (Germany-localized tone, formal/informal balance)",
+        "DE": "German (Germany-localized tone, formal/informal balance)",
+
+        "italy": "Italian (Italy-local tone & idioms)",
+        "it": "Italian (Italy-local tone & idioms)",
+
+        "portugal": "European Portuguese (Portugal tone)",
+        "pt": "European Portuguese (Portugal tone)",
+
+        "brazil": "Brazilian Portuguese (Português do Brasil)",
+        "br": "Brazilian Portuguese (Português do Brasil)",
+
+        "russia": "Russian (Russia-local tone, vocabulary, voice)",
+        "ru": "Russian (Russia-local tone, vocabulary, voice)",
+
+        "china": "Simplified Chinese (Mainland China tone & phrasing)",
+        "cn": "Simplified Chinese (Mainland China tone & phrasing)",
+
+        "japan": "Japanese (Japan-local, polite tone)",
+        "jp": "Japanese (Japan-local, polite tone)",
+
+        "south korea": "Korean (South Korea tone, native phrasing)",
+        "kr": "Korean (South Korea tone, native phrasing)",
+
+        "turkey": "Turkish (Turkey-local tone)",
+        "tr": "Turkish (Turkey-local tone)",
+
+        "netherlands": "Dutch (Netherlands-local tone)",
+        "nl": "Dutch (Netherlands-local tone)",
+
+        "sweden": "Swedish (Sweden-local tone)",
+        "se": "Swedish (Sweden-local tone)",
+
+        "poland": "Polish (Poland-local tone)",
+        "pl": "Polish (Poland-local tone)",
+
+        "ukraine": "Ukrainian (Ukraine-local tone)",
+        "ua": "Ukrainian (Ukraine-local tone)",
+
+        "romania": "Romanian (Romania-local tone)",
+        "ro": "Romanian (Romania-local tone)",
+
+        "thailand": "Thai (Thailand-local tone & phrasing)",
+        "th": "Thai (Thailand-local tone & phrasing)",
+
+        "vietnam": "Vietnamese (Vietnam-local Hội thoại tone)",
+        "vn": "Vietnamese (Vietnam-local Hội thoại tone)",
+
+        "indonesia": "Indonesian (Bahasa Indonesia native tone)",
+        "id": "Indonesian (Bahasa Indonesia native tone)",
+
+        "greece": "Greek (Greece-local tone & idioms)",
+        "gr": "Greek (Greece-local tone & idioms)",
+
+        "czech republic": "Czech (Czechia-local tone)",
+        "cz": "Czech (Czechia-local tone)",
+
+        "pakistan": "Urdu (Pakistan-local tone & phrasing)",
+        "pk": "Urdu (Pakistan-local tone & phrasing)",
+
+        "saudi": "Saudi Arabic (Gulf / Saudi local tone)",
+        "sa": "Saudi Arabic (Gulf / Saudi local tone)",
+
+        "united arab emirates": "Emirati Arabic (UAE local Arabic tone)",
+        "ae": "Emirati Arabic (UAE local Arabic tone)",
+
+        "egypt": "Egyptian Arabic (Masri local conversational tone)",
+        "eg": "Egyptian Arabic (Masri local conversational tone)",
+
+        "india": "Indian English / Hindi-influenced localization depending on language",
+        "in": "Indian English / Hindi-influenced localization depending on language",
     }
+
     country_raw = getattr(query, "targetCountry", None) or getattr(
         query, "targetcountry", None)
     style = country_to_style.get(

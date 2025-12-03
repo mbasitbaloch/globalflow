@@ -793,11 +793,13 @@ def validate_language_and_country(target_language: str, target_country: str, tex
     country = target_country.upper().replace("FRANCE", "FR").split("-")[0]
     supported_regions = {lang.split("-")[1]
                          for lang in LANGUAGES.keys() if "-" in lang}
+    print("Supported regions:", supported_regions)
     if country not in supported_regions:
         return False, f"Country '{target_country}' is not supported. Supported regions: {', '.join(sorted(supported_regions))}."
 
     # Validate target language
     supported_langs = {lang.split("-")[0] for lang in LANGUAGES.keys()}
+    print("supported languages:", supported_langs)
     if target_language not in supported_langs:
         return False, f"Target language '{target_language}' is not supported. Supported languages: {', '.join(sorted(supported_langs))}."
 
