@@ -857,7 +857,7 @@ async def fewshotTranslationParallel(examples, query, SafeJsonParser, llm):
         "fr": "European French (France French, natural Parisian tone)",
 
         "germany": "German (Germany-localized tone, formal/informal balance)",
-        "DE": "German (Germany-localized tone, formal/informal balance)",
+        "de": "German (Germany-localized tone, formal/informal balance)",
 
         "italy": "Italian (Italy-local tone & idioms)",
         "it": "Italian (Italy-local tone & idioms)",
