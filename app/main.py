@@ -5,9 +5,11 @@ from .routes import hs_users
 from .database import Base, engine
 from app.models.models import Translation
 import sentry_sdk
+from .config import settings
 
 sentry_sdk.init(
-    dsn="https://9aa1cba62037b2a28e85948ac2ec2049@o4509993463578624.ingest.de.sentry.io/4509993483698256",
+    dsn=settings.SENTRY_URL,
+    # dsn="https://9aa1cba62037b2a28e85948ac2ec2049@o4509993463578624.ingest.de.sentry.io/4509993483698256",
     # Add data like request headers and IP for users,
     # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
     send_default_pii=True,
@@ -24,7 +26,12 @@ sentry_sdk.init(
     profile_lifecycle="trace",
 )
 
-app = FastAPI(title="GlobalFlow.ai - Phase 1")
+app = FastAPI(title="GlobalFlow.ai - Phase 1",
+              docs_url="/docs",
+              redoc_url="/redoc",
+              openapi_url="/openapi.json",
+              root_path="/glflow"
+              )
 
 Base.metadata.create_all(bind=engine)
 

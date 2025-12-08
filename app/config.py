@@ -22,6 +22,7 @@ class Settings:
     REDIS_HOST: str = os.getenv("REDIS_HOST", "")
     REDIS_PORT: int = int(os.getenv("REDIS_PORT", 6379))
     SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
+    SENTRY_URL: str = os.getenv("SENTRY_URL", "")
 
 
 settings = Settings()
