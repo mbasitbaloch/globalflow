@@ -103,14 +103,14 @@ def get_full_translation_from_cache(shop_domain: str, target_lang: str, brand_to
             if cache_data.get("raw_hash") == current_raw_hash:
                 print(
                     f"Full JSON cache HIT (hash match) for {shop_domain}:{target_lang}:{brand_tone}:{targetCountry}")
-                file_name = f"Today_translated_{uuid.uuid4().hex}.json"
-                file_path = os.path.join("tmp", file_name)
-                os.makedirs("tmp", exist_ok=True)
+                # file_name = f"Today_translated_{uuid.uuid4().hex}.json"
+                # file_path = os.path.join("tmp", file_name)
+                # os.makedirs("tmp", exist_ok=True)
 
-                with open(file_path, "w", encoding="utf-8") as f:
-                    json.dump(cache_data["translated"], f,
-                              ensure_ascii=False, indent=2)
-                print("Translated JSON saved to file:", file_path)
+                # with open(file_path, "w", encoding="utf-8") as f:
+                #     json.dump(cache_data["translated"], f,
+                #               ensure_ascii=False, indent=2)
+                # print("Translated JSON saved to file:", file_path)
                 return copy.deepcopy(cache_data["translated"])
             else:
                 print(

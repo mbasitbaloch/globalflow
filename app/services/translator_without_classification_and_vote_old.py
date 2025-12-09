@@ -24,22 +24,22 @@ from qdrant_client.http import models
 from collections import defaultdict
 
 
-LOG_DIR = "logs"
-os.makedirs(LOG_DIR, exist_ok=True)
+# LOG_DIR = "logs"
+# os.makedirs(LOG_DIR, exist_ok=True)
 
-BATCHES_DIR = os.path.join(LOG_DIR, "batches")
-os.makedirs(BATCHES_DIR, exist_ok=True)
+# BATCHES_DIR = os.path.join(LOG_DIR, "batches")
+# os.makedirs(BATCHES_DIR, exist_ok=True)
 
-REPORT_DIR = os.path.join(LOG_DIR, "report")
-os.makedirs(REPORT_DIR, exist_ok=True)
+# REPORT_DIR = os.path.join(LOG_DIR, "report")
+# os.makedirs(REPORT_DIR, exist_ok=True)
 
-CONSOLE_DIR = os.path.join(LOG_DIR, "console")
-os.makedirs(CONSOLE_DIR, exist_ok=True)
-console_file = os.path.join(CONSOLE_DIR, "console.json")
+# CONSOLE_DIR = os.path.join(LOG_DIR, "console")
+# os.makedirs(CONSOLE_DIR, exist_ok=True)
+# console_file = os.path.join(CONSOLE_DIR, "console.json")
 
 raw_logs = [{"message": "Logs"}]
-with open(console_file, "w", encoding="utf-8") as f:
-    json.dump(raw_logs[0], f, ensure_ascii=False, indent=4)
+# with open(console_file, "w", encoding="utf-8") as f:
+#     json.dump(raw_logs[0], f, ensure_ascii=False, indent=4)
 
 # ===================== GLOBAL REPORT TRACKER =====================
 TRANSLATION_STATS = {
@@ -514,13 +514,13 @@ async def _translate_batch(indexed_strings, examples, user_id, shopDomain, targe
 
 
 # ===================== SAVE REPORT =====================
-def save_report():
-    existing = len([f for f in os.listdir(
-        REPORT_DIR) if f.startswith("report_")])
-    report_file = os.path.join(REPORT_DIR, f"report_{existing+1}.json")
-    with open(report_file, "w", encoding="utf-8") as f:
-        json.dump(TRANSLATION_STATS, f, ensure_ascii=False, indent=2)
-    print(f" Report saved to {report_file}")
+# def save_report():
+#     existing = len([f for f in os.listdir(
+#         REPORT_DIR) if f.startswith("report_")])
+#     report_file = os.path.join(REPORT_DIR, f"report_{existing+1}.json")
+#     with open(report_file, "w", encoding="utf-8") as f:
+#         json.dump(TRANSLATION_STATS, f, ensure_ascii=False, indent=2)
+#     print(f" Report saved to {report_file}")
 
 
 # ===================== MAIN TRANSLATOR =====================
@@ -687,11 +687,11 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, tar
 
     # ---- SAVE EXTRACTED ----
     extracted_log = [{"path": p, "string": s} for _, s, p in positions]
-    extracted_file = os.path.join(
-        LOG_DIR, f"extracted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-    with open(extracted_file, "w", encoding="utf-8") as f:
-        json.dump(extracted_log, f, ensure_ascii=False, indent=2)
-    print(f"Saved extracted strings to {extracted_file}")
+    # extracted_file = os.path.join(
+    #     LOG_DIR, f"extracted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    # with open(extracted_file, "w", encoding="utf-8") as f:
+    #     json.dump(extracted_log, f, ensure_ascii=False, indent=2)
+    # print(f"Saved extracted strings to {extracted_file}")
 
     def serialize_batches(batches, batch_type):
         serialized = []
@@ -727,8 +727,8 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, tar
         results.append(res)
     all_translation_results = results
 
-    with open(console_file, "a", encoding="utf-8") as f:
-        json.dump(logs, f, ensure_ascii=False, indent=4)
+    # with open(console_file, "a", encoding="utf-8") as f:
+    #     json.dump(logs, f, ensure_ascii=False, indent=4)
 
     final_translation_pairs = [
         pair for batch in all_translation_results if batch is not None for pair in batch]
@@ -751,19 +751,19 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, tar
     end = datetime.now()
     print(f"Total time consumed for translation: {end-start}")
 
-    comparative_file = os.path.join(LOG_DIR, "comparative.json")
-    with open(comparative_file, "w", encoding="utf-8") as f:
-        json.dump(
-            [{"path": path_str, "orig": orig, "trans": trans} for (
-                path, orig_val, path_str), orig, trans in zip(positions, strings_to_translate, final_results)],
-            f, ensure_ascii=False, indent=2
-        )
-    counter = 0
-    for s, t in zip(strings_to_translate, final_results):
-        if s == t:
-            counter += 1
-    print(
-        f"Saved comparison strings to {comparative_file}, total {counter} strings are not translated, i.e. same as original.")
+    # comparative_file = os.path.join(LOG_DIR, "comparative.json")
+    # with open(comparative_file, "w", encoding="utf-8") as f:
+    #     json.dump(
+    #         [{"path": path_str, "orig": orig, "trans": trans} for (
+    #             path, orig_val, path_str), orig, trans in zip(positions, strings_to_translate, final_results)],
+    #         f, ensure_ascii=False, indent=2
+    #     )
+    # counter = 0
+    # for s, t in zip(strings_to_translate, final_results):
+    #     if s == t:
+    #         counter += 1
+    # print(
+    #     f"Saved comparison strings to {comparative_file}, total {counter} strings are not translated, i.e. same as original.")
 
     # ---------- INJECTION ----------
     def set_value_with_original(d, path, translated, path_str):
@@ -808,14 +808,14 @@ async def fast_translate_json(target_data, user_id, shopDomain, target_lang, tar
     print(f"Total {counter} strings are injected")
 
     # ---- SAVE INJECTED ----
-    injected_file = os.path.join(
-        LOG_DIR, f"injected_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-    with open(injected_file, "w", encoding="utf-8") as f:
-        json.dump(injected_log, f, ensure_ascii=False, indent=2)
-    print(f"Saved injected strings to {injected_file}")
+    # injected_file = os.path.join(
+    #     LOG_DIR, f"injected_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    # with open(injected_file, "w", encoding="utf-8") as f:
+    #     json.dump(injected_log, f, ensure_ascii=False, indent=2)
+    # print(f"Saved injected strings to {injected_file}")
 
-    print(f"Injected {len(final_results)}/{len(strings_to_translate)} strings")
-    save_report()
+    # print(f"Injected {len(final_results)}/{len(strings_to_translate)} strings")
+    # save_report()
 
     # Cache the full translated JSON
     set_full_translation_in_cache(

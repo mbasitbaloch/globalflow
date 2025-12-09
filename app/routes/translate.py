@@ -246,11 +246,12 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
         if cached_translated:
             logger.info(
                 f"Translation served from cache for {shop_domain} (hash match)")
-            file_name = f"Today_fetched_{uuid.uuid4().hex}.json"
-            file_path = os.path.join("fetched_data", file_name)
-            os.makedirs("fetched_data", exist_ok=True)
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(raw_data, f, ensure_ascii=False, indent=2)
+
+            # file_name = f"Today_fetched_{uuid.uuid4().hex}.json"
+            # file_path = os.path.join("fetched_data", file_name)
+            # os.makedirs("fetched_data", exist_ok=True)
+            # with open(file_path, "w", encoding="utf-8") as f:
+            #     json.dump(raw_data, f, ensure_ascii=False, indent=2)
 
             translation_record = Translation(
                 user_id=user_id,
@@ -277,7 +278,7 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
 
             return {
                 "message": "Translation served from cache (data unchanged)",
-                "file_path": file_path,
+                # "file_path": file_path,
                 "translation_id": translation_record.id,
                 "translation": cached_translated
             }
@@ -298,20 +299,20 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
             shop_domain, target_language, brand_tone, translated_data, fresh_hash, target_country)
 
         # Save original JSON to file
-        file_name = f"Today_fetched_{uuid.uuid4().hex}.json"
-        file_path = os.path.join("fetched_data", file_name)
-        os.makedirs("fetched_data", exist_ok=True)
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(raw_data, f, ensure_ascii=False, indent=2)
+        # file_name = f"Today_fetched_{uuid.uuid4().hex}.json"
+        # file_path = os.path.join("fetched_data", file_name)
+        # os.makedirs("fetched_data", exist_ok=True)
+        # with open(file_path, "w", encoding="utf-8") as f:
+        #     json.dump(raw_data, f, ensure_ascii=False, indent=2)
 
-        # Save translated JSON to file
-        logger.info("Saving translated JSON to file...")
-        file_name = f"Today_translated_{uuid.uuid4().hex}.json"
-        file_path = os.path.join("tmp", file_name)
-        os.makedirs("tmp", exist_ok=True)
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(translated_data, f, ensure_ascii=False, indent=2)
-        logger.info(f"Translated JSON saved to file: {file_path}")
+        # # Save translated JSON to file
+        # logger.info("Saving translated JSON to file...")
+        # file_name = f"Today_translated_{uuid.uuid4().hex}.json"
+        # file_path = os.path.join("tmp", file_name)
+        # os.makedirs("tmp", exist_ok=True)
+        # with open(file_path, "w", encoding="utf-8") as f:
+        #     json.dump(translated_data, f, ensure_ascii=False, indent=2)
+        # logger.info(f"Translated JSON saved to file: {file_path}")
 
         # Save to PostgreSQL
         translation_record = Translation(
@@ -339,7 +340,7 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
 
         return {
             "message": "Translation completed successfully",
-            "file_path": file_path,
+            # "file_path": file_path,
             "translation_id": translation_record.id,
             "translation": translated_data
         }
