@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routes import translate, ingest, suggestions
+from .routes import suggestions, translate, ingest
 from .routes import hs_users
 from .database import Base, engine
 from app.models.models import Translation
@@ -26,12 +26,7 @@ sentry_sdk.init(
     profile_lifecycle="trace",
 )
 
-app = FastAPI(title="GlobalFlow.ai - Phase 1",
-              docs_url="/docs",
-              redoc_url="/redoc",
-              openapi_url="/openapi.json",
-              root_path="/glflow"
-              )
+app = FastAPI(title="GlobalFlow.ai - Phase 1")
 
 Base.metadata.create_all(bind=engine)
 

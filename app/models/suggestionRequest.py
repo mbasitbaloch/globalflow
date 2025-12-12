@@ -1,3 +1,4 @@
+from uuid import UUID
 from pydantic import BaseModel, field_validator, ConfigDict, Field
 from typing import List, Optional, Dict
 import re
@@ -51,6 +52,7 @@ class ApplyRequest(BaseModel):
     before: str = Field(..., description="Original string before change")
     after: str = Field(..., description="Updated string after change")
     metadata: Optional[Dict] = Field(None, description="Additional info")
+    option_id: Optional[UUID] = None
 
     model_config = ConfigDict(
         str_strip_whitespace=True,  # replaces anystr_strip_whitespace

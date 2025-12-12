@@ -14,7 +14,11 @@ from ..utils.cache_manager import (
     set_stylepack_in_cache
 )
 from ..database import SessionLocal
-from ..models.suggestion import Suggestion, SuggestionAudit
+from ..models.suggestion import (
+    SuggestionSegment,
+    SuggestionOption,
+    SuggestionAudit
+)
 import hashlib
 import logging
 import asyncio
