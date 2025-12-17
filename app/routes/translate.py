@@ -786,7 +786,7 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
 #     }
 
 
-def validate_language_and_country(target_language: str, target_country: str, text: str) -> tuple[bool, str]:
+def validate_language_and_country_old(target_language: str, target_country: str, text: str) -> tuple[bool, str]:
     """
     Validate if the target language, country, and text are compatible.
     """
@@ -919,6 +919,75 @@ class SafeJsonParser:
                     f"❌ Failed to parse sanitized JSON: {e2}\nRaw: {text[:500]}")
 
 
+def normalize_language(lang: str) -> str:
+    if not lang:
+        return ""
+
+    lang = lang.strip().lower()
+
+    # Already short code (fr, de, en)
+    if len(lang) == 2:
+        return lang
+
+    # Try full name → short code
+    try:
+        language = pycountry.languages.lookup(lang)
+        if hasattr(language, "alpha_2"):
+            return language.alpha_2.lower()
+    except LookupError:
+        pass
+
+    return lang  # fallback (will fail validation later)
+
+
+def normalize_country(country: str) -> str:
+    if not country:
+        return ""
+
+    country = country.strip().upper()
+
+    # Already short code
+    if len(country) == 2:
+        return country
+
+    try:
+        c = pycountry.countries.lookup(country)
+        return c.alpha_2.upper()
+    except LookupError:
+        pass
+
+    return country
+
+
+def validate_language_and_country(target_language: str, target_country: str, text: str):
+
+    # ✅ Normalize first
+    lang = normalize_language(target_language)
+    country = normalize_country(target_country)
+
+    # Supported from LANGUAGES (already short based)
+    supported_langs = {k.split("-")[0] for k in LANGUAGES.keys()}
+    supported_regions = {k.split("-")[1] for k in LANGUAGES.keys()}
+
+    if lang not in supported_langs:
+        return False, f"Target language '{target_language}' is not supported."
+
+    if country not in supported_regions:
+        return False, f"Country '{target_country}' is not supported."
+
+    # Validate lang-country pair
+    if f"{lang}-{country}" not in LANGUAGES:
+        combos = [k for k in LANGUAGES if k.startswith(lang + "-")]
+        return False, f"Language '{lang}' not valid for '{country}'. Supported: {', '.join(combos)}"
+
+    # Detect text language
+    detected = detect(text)
+    if detected != lang:
+        return False, f"Text is '{detected}' but target is '{lang}'."
+
+    return True, "OK"
+
+
 @router.put("/shopify/update-string")
 async def update_translated_string(req: UpdateRequest, db: Session = Depends(get_db)):
     """
@@ -966,15 +1035,27 @@ async def update_translated_string(req: UpdateRequest, db: Session = Depends(get
                 status_code=400,
                 detail=f"Shop domain mismatch: Request domain '{req.shopDomain}' does not match stored domain '{translation.shop_domain}'."
             )
-        if translation.target_lang != req.targetLanguage:
+        # if translation.target_lang != req.targetLanguage:
+        #     raise HTTPException(
+        #         status_code=400,
+        #         detail=f"Target language mismatch: The translation record was created for '{translation.target_lang}', but you are trying to update using '{req.targetLanguage}'."
+        #     )
+        req_lang = normalize_language(req.targetLanguage)
+        req_country = normalize_country(req.targetcountry)
+
+        db_lang = normalize_language(translation.target_lang)
+        db_country = normalize_country(translation.targetCountry)
+
+        if db_lang != req_lang:
             raise HTTPException(
                 status_code=400,
-                detail=f"Target language mismatch: The translation record was created for '{translation.target_lang}', but you are trying to update using '{req.targetLanguage}'."
+                detail=f"Target language mismatch: DB='{db_lang}', Request='{req_lang}'"
             )
-        if translation.targetCountry and translation.targetCountry.lower() != req.targetcountry.lower():
+
+        if db_country != req_country:
             raise HTTPException(
                 status_code=400,
-                detail=f"Target country mismatch: Existing translation country is '{translation.targetCountry}', but you tried to update using '{req.targetcountry}'."
+                detail=f"Target country mismatch: DB='{db_country}', Request='{req_country}'"
             )
 
         #         # --- Get user ---
@@ -1136,7 +1217,8 @@ async def update_translated_string(req: UpdateRequest, db: Session = Depends(get
         translation.translated_text_json = data
         translation.translated_text_raw = json.dumps(data, ensure_ascii=False)
         translation.updated_at = datetime.now()
-        translation.targetCountry = req.targetcountry
+        translation.target_lang = req_lang
+        translation.targetCountry = req_country
         translation.expert_edit = req.expertEdit
         translation.customer_edit = req.customerEdit
         translation.transAccept = req.transAccept
@@ -1150,9 +1232,17 @@ async def update_translated_string(req: UpdateRequest, db: Session = Depends(get
         # Invalidate caches
         try:
             invalidate_full_translation_cache(
-                req.shopDomain, req.targetLanguage, translation.brand_tone, req.targetcountry)
+                req.shopDomain,
+                req_lang,
+                translation.brand_tone,
+                req_country
+            )
+
             invalidate_extracted_data_cache(
-                req.shopDomain, req.targetLanguage, req.targetcountry)
+                req.shopDomain,
+                req_lang,
+                req_country
+            )
             logger.info(
                 f"Caches invalidated for shopDomain: {req.shopDomain}, targetLanguage: {req.targetLanguage}:{req.targetcountry}")
         except Exception as e:
@@ -1175,8 +1265,8 @@ async def update_translated_string(req: UpdateRequest, db: Session = Depends(get
                     "industry": (user or {}).get("industry") or "Unknown",
                     "postgres_id": translation.id,
                     "shopDomain": req.shopDomain,
-                    "targetLanguage": req.targetLanguage,
-                    "targetCountry": req.targetcountry,
+                    "targetLanguage": req_lang,
+                    "targetCountry": req_country,
                     "path": req.path,
                     "newValue": req.newValue,
                     "originalValue": req.originalValue,
