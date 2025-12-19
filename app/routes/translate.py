@@ -1258,7 +1258,7 @@ async def update_translated_string(req: UpdateRequest, db: Session = Depends(get
             embedding = response.data[0].embedding
             correction_point = PointStruct(
                 id=str(uuid.uuid4()),
-                vector={"GlobalFlow": embedding},
+                vector={"globalflow": embedding},
                 payload={
                     "data_type": "correction",
                     "user_id": str(user["_id"]) if user else None,
