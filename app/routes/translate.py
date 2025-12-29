@@ -353,439 +353,6 @@ async def shopify_translate(req: dict, db: Session = Depends(get_db)):
             status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-# version of translate endpoint with improved code at 15-11-2025 at 12:40 PM
-# @router.post("/shopify/translate")
-# async def shopify_translate(req: dict, db: Session = Depends(get_db)):
-#     """
-#     Translate Shopify store data or specific text.
-#     Expect body:
-#     {
-#       "shopDomain": "...",
-#       "accessToken": "...",
-#       "targetLanguage": "fr",
-#       "targetcountry": "FR",
-#       "brandTone": "neutral",
-#       "text": "..."  # Optional
-#     }
-#     """
-#     try:
-#         # Validate required fields
-#         allowed_fields = {"shopDomain", "accessToken",
-#                           "targetLanguage", "targetcountry", "brandTone"}
-#         required_fields = ["shopDomain", "accessToken",
-#                            "targetLanguage", "brandTone", "targetcountry"]
-
-#         # Check for unknown fields
-#         unknown_fields = [f for f in req.keys() if f not in allowed_fields]
-#         if unknown_fields:
-#             raise HTTPException(
-#                 status_code=400,
-#                 detail=f"Unknown fields in payload: {', '.join(unknown_fields)}. Allowed fields: {', '.join(allowed_fields)}"
-#             )
-
-#         missing = [f for f in required_fields if f not in req]
-#         if missing:
-#             raise HTTPException(
-#                 status_code=400, detail=f"Missing required fields: {', '.join(missing)}")
-
-#         # Check for empty values
-#         empty_fields = [f for f in required_fields if not str(req[f]).strip()]
-#         if empty_fields:
-#             raise HTTPException(
-#                 status_code=400, detail=f"Empty values found in: {', '.join(empty_fields)}")
-
-#         # Validate shop domain
-#         shop_domain = req["shopDomain"].strip()
-#         domain_pattern = re.compile(r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$")
-#         if not domain_pattern.match(shop_domain):
-#             raise HTTPException(
-#                 status_code=400, detail="Invalid shop domain format. Please enter a valid domain like 'example.myshopify.com'.")
-
-#         # Validate target language and country
-#         target_language = req["targetLanguage"]
-#         target_country = req["targetcountry"]
-#         text = req.get("text")
-#         valid, msg = validate_language_and_country(
-#             target_language, target_country, text)
-#         if not valid:
-#             raise HTTPException(status_code=400, detail=msg)
-
-#         # Validate brand tone
-#         brand_tone = req["brandTone"].strip()
-#         # if brand_tone not in BRAND_TONES:
-#         #     supported_tones = ", ".join(BRAND_TONES)
-#         #     raise HTTPException(
-#         #         status_code=400, detail=f"Invalid brand tone '{brand_tone}'. Supported tones: {supported_tones}.")
-
-#         # Get user from MongoDB
-#         user = users_collection.find_one(
-#             {"shopifyStores.shopDomain": shop_domain})
-#         if not user:
-#             raise HTTPException(status_code=404, detail="Shop not found")
-#         industry = user.get("industry", "general")
-#         user_id = str(user["_id"])
-
-#         # Check extracted data cache
-#         cache_key = f"shopify_data:{shop_domain}:{target_language}:{target_country}"
-#         cached_data = get_cached_extracted_data(cache_key)
-#         raw_data = None
-
-#         if cached_data:
-#             url = "https://stagingapi.globalflow.ai/api/shopify/unauth/get-all-store-data"
-#             response = requests.post(url, json={
-#                 "shopDomain": shop_domain,
-#                 "accessToken": req["accessToken"],
-#                 "targetLanguage": target_language,
-#                 "brandTone": brand_tone,
-#                 "targetcountry": target_country
-#             })
-#             response.raise_for_status()
-#             fresh_data = response.json()
-#             fresh_hash = compute_raw_hash(fresh_data)
-#             cached_hash = compute_raw_hash(cached_data)
-
-#             if fresh_hash == cached_hash:
-#                 logger.info(
-#                     f"Extracted data cache hit for {shop_domain}:{target_language}:{target_country}")
-#                 raw_data = cached_data
-#             else:
-#                 logger.info(
-#                     f"Extracted data cache miss (hash mismatch: {cached_hash[:8]} != {fresh_hash[:8]})")
-#                 raw_data = fresh_data
-#         else:
-#             logger.info(
-#                 f"No cached extracted data for {shop_domain}:{target_language}:{target_country}")
-#             url = "https://stagingapi.globalflow.ai/api/shopify/unauth/get-all-store-data"
-#             response = requests.post(url, json={
-#                 "shopDomain": shop_domain,
-#                 "accessToken": req["accessToken"],
-#                 "targetLanguage": target_language,
-#                 "brandTone": brand_tone,
-#                 "targetcountry": target_country
-#             })
-#             response.raise_for_status()
-#             raw_data = response.json()
-
-#         # Cache the extracted data
-#         cache_extracted_data(cache_key, raw_data)
-
-#         # Check full translation cache
-#         fresh_hash = compute_raw_hash(raw_data)
-#         cached_translated = get_full_translation_from_cache(
-#             shop_domain, target_language, brand_tone, fresh_hash, target_country)
-#         if cached_translated:
-#             logger.info(
-#                 f"Translation served from cache for {shop_domain} (hash match)")
-#             file_name = f"Today_fetched_{uuid.uuid4().hex}.json"
-#             file_path = os.path.join("fetched_data", file_name)
-#             os.makedirs("fetched_data", exist_ok=True)
-#             with open(file_path, "w", encoding="utf-8") as f:
-#                 json.dump(raw_data, f, ensure_ascii=False, indent=2)
-
-#             translation_record = Translation(
-#                 user_id=user_id,
-#                 industry=industry,
-#                 shop_domain=shop_domain,
-#                 brand_tone=brand_tone,
-#                 target_lang=target_language,
-#                 targetCountry=target_country,
-#                 content_type="json",
-#                 original_text_raw=json.dumps(raw_data, ensure_ascii=False),
-#                 original_text_json=raw_data,
-#                 translated_text_raw=json.dumps(
-#                     cached_translated, ensure_ascii=False),
-#                 translated_text_json=cached_translated
-#             )
-#             db.add(translation_record)
-#             db.commit()
-#             db.refresh(translation_record)
-
-#             logger.info("Celery task started...")
-#             task = store_data.delay(
-#                 cached_translated, req, raw_data, translation_record.id)
-#             logger.info(f"New task ID: {task.id}")
-
-#             return {
-#                 "message": "Translation served from cache (data unchanged)",
-#                 "file_path": file_path,
-#                 "translation_id": translation_record.id,
-#                 "translation": cached_translated
-#             }
-
-#         # Cache miss: Run full translation pipeline
-#         translated_data = await fast_translate_json(
-#             raw_data,
-#             user_id=user_id,
-#             shopDomain=shop_domain,
-#             target_lang=target_language,
-#             targetCountry=target_country,
-#             brand_tone=brand_tone,
-#             industry=industry,
-#             text=text
-#         )
-
-#         # Cache the full translated JSON
-#         set_full_translation_in_cache(
-#             shop_domain, target_language, brand_tone, translated_data, fresh_hash, target_country)
-
-#         # Save original JSON to file
-#         file_name = f"Today_fetched_{uuid.uuid4().hex}.json"
-#         file_path = os.path.join("fetched_data", file_name)
-#         os.makedirs("fetched_data", exist_ok=True)
-#         with open(file_path, "w", encoding="utf-8") as f:
-#             json.dump(raw_data, f, ensure_ascii=False, indent=2)
-
-#         # Save translated JSON to file
-#         logger.info("Saving translated JSON to file...")
-#         file_name = f"Today_translated_{uuid.uuid4().hex}.json"
-#         file_path = os.path.join("tmp", file_name)
-#         os.makedirs("tmp", exist_ok=True)
-#         with open(file_path, "w", encoding="utf-8") as f:
-#             json.dump(translated_data, f, ensure_ascii=False, indent=2)
-#         logger.info(f"Translated JSON saved to file: {file_path}")
-
-#         # Save to PostgreSQL
-#         translation_record = Translation(
-#             user_id=user_id,
-#             industry=industry,
-#             shop_domain=shop_domain,
-#             brand_tone=brand_tone,
-#             target_lang=target_language,
-#             targetCountry=target_country,
-#             content_type="json",
-#             original_text_raw=json.dumps(raw_data, ensure_ascii=False),
-#             original_text_json=raw_data,
-#             translated_text_raw=json.dumps(
-#                 translated_data, ensure_ascii=False),
-#             translated_text_json=translated_data
-#         )
-#         db.add(translation_record)
-#         db.commit()
-#         db.refresh(translation_record)
-
-#         logger.info("Celery task started...")
-#         task = store_data.delay(translated_data, req,
-#                                 raw_data, translation_record.id)
-#         logger.info(f"New task ID: {task.id}")
-
-#         return {
-#             "message": "Translation completed successfully",
-#             "file_path": file_path,
-#             "translation_id": translation_record.id,
-#             "translation": translated_data
-#         }
-
-#     except HTTPException as e:
-#         raise e
-#     except Exception as e:
-#         logger.error(f"Unexpected error in shopify/translate: {str(e)}")
-#         raise HTTPException(
-#             status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-# @router.post("/shopify/translate")
-# async def shopify_translate(req: dict, db: Session = Depends(get_db)):
-#     """
-#     Expect body:
-#     {
-#       "shopDomain": "...",
-#       "accessToken": "...",
-#       "targetLanguage": "fr",
-#       "targetcountry":"FR",
-#       "brandTone": "neutral"
-#     }
-#     """
-#     # Validate request
-#     required_fields = ["shopDomain", "accessToken",
-#                        "targetLanguage", "brandTone", "targetcountry"]
-
-#     # Check all required fields exist
-#     missing = [f for f in required_fields if f not in req]
-#     if missing:
-#         raise HTTPException(
-#             status_code=400, detail=f"Missing required fields: {', '.join(missing)}")
-
-#     # Check none are empty or null
-#     empty_fields = [f for f in required_fields if not str(req[f]).strip()]
-#     if empty_fields:
-#         raise HTTPException(
-#             status_code=400, detail=f"Empty values found in: {', '.join(empty_fields)}, please enter an entry for {', '.join(empty_fields)}")
-
-#     # Validate shop domain properly
-#     shop_domain = req["shopDomain"].strip()
-#     domain_pattern = re.compile(
-#         # e.g., something.com or abc.myshopify.com
-#         r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$"
-#     )
-#     if not domain_pattern.match(shop_domain):
-#         raise HTTPException(
-#             status_code=400, detail="Invalid shop domain format. Please enter a valid domain like 'example.myshopify.com'.")
-
-#     # Get user from MongoDB
-#     shop_domain = req["shopDomain"]
-#     targetLanguage = req["targetLanguage"]
-#     targetCountry = req["targetcountry"]
-#     brand_tone = req["brandTone"]
-
-#     user = users_collection.find_one({"shopifyStores.shopDomain": shop_domain})
-#     if not user:
-#         raise HTTPException(status_code=404, detail="Shop not found")
-#     industry = user.get("industry", "general")
-#     user_id = str(user["_id"])
-
-#     # Check extracted data cache
-#     cache_key = f"shopify_data:{shop_domain}:{targetLanguage}:{targetCountry}"
-#     cached_data = get_cached_extracted_data(cache_key)
-#     raw_data = None
-
-#     if cached_data:
-#         # Fetch fresh data to compare
-#         url = "https://stagingapi.globalflow.ai/api/shopify/unauth/get-all-store-data"
-#         response = requests.post(url, json={
-#             "shopDomain": shop_domain,
-#             "accessToken": req["accessToken"],
-#             "targetLanguage": targetLanguage,
-#             "brandTone": brand_tone,
-#             "targetcountry": targetCountry
-#         })
-#         response.raise_for_status()
-#         fresh_data = response.json()
-#         fresh_hash = compute_raw_hash(fresh_data)
-#         cached_hash = compute_raw_hash(cached_data)
-
-#         if fresh_hash == cached_hash:
-#             print(
-#                 f"Extracted data cache hit for {shop_domain}:{targetLanguage}:{targetCountry}")
-#             raw_data = cached_data
-#         else:
-#             print(
-#                 f"Extracted data cache miss (hash mismatch: {cached_hash[:8]} != {fresh_hash[:8]})")
-#             raw_data = fresh_data
-#     else:
-#         print(
-#             f"No cached extracted data for {shop_domain}:{targetLanguage}:{targetCountry}")
-#         # Fetch fresh data from Shopify
-#         url = "https://stagingapi.globalflow.ai/api/shopify/unauth/get-all-store-data"
-#         response = requests.post(url, json={
-#             "shopDomain": shop_domain,
-#             "accessToken": req["accessToken"],
-#             "targetLanguage": targetLanguage,
-#             "brandTone": brand_tone,
-#             "targetcountry": targetCountry
-#         })
-#         response.raise_for_status()
-#         raw_data = response.json()
-
-#     # Cache the extracted data
-#     cache_extracted_data(cache_key, raw_data)
-
-#     # Check full translation cache
-#     fresh_hash = compute_raw_hash(raw_data)
-#     cached_translated = get_full_translation_from_cache(
-#         shop_domain, targetLanguage, brand_tone, fresh_hash, targetCountry)
-#     if cached_translated:
-#         print(f"Translation served from cache for {shop_domain} (hash match)")
-#         # Save original JSON
-#         file_name = f"Today_fetched_{uuid.uuid4().hex}.json"
-#         file_path = os.path.join("fetched_data", file_name)
-#         os.makedirs("fetched_data", exist_ok=True)
-#         with open(file_path, "w", encoding="utf-8") as f:
-#             json.dump(raw_data, f, ensure_ascii=False, indent=2)
-
-#         # Save to PostgreSQL
-#         translation_record = Translation(
-#             user_id=user_id,
-#             industry=industry,
-#             shop_domain=shop_domain,
-#             brand_tone=brand_tone,
-#             target_lang=targetLanguage,
-#             targetCountry=targetCountry,
-#             content_type="json",
-#             original_text_raw=json.dumps(raw_data, ensure_ascii=False),
-#             original_text_json=raw_data,
-#             translated_text_raw=json.dumps(
-#                 cached_translated, ensure_ascii=False),
-#             translated_text_json=cached_translated
-#         )
-#         db.add(translation_record)
-#         db.commit()
-#         db.refresh(translation_record)
-
-#         print("Celery task started...")
-#         task = store_data.delay(cached_translated, req,
-#                                 raw_data, translation_record.id)
-#         print(f"New task ID: {task.id}")
-
-#         return {
-#             "message": "Translation served from cache (data unchanged)",
-#             "file_path": file_path,
-#             "translation_id": translation_record.id,
-#             "translation": cached_translated
-#         }
-
-#     # Cache miss: Run full translation pipeline
-#     translated_data = await fast_translate_json(
-#         raw_data,
-#         user_id=user_id,
-#         shopDomain=shop_domain,
-#         target_lang=targetLanguage,
-#         targetCountry=targetCountry,
-#         brand_tone=brand_tone,
-#         industry=industry
-#     )
-
-#     # Cache the full translated JSON
-#     set_full_translation_in_cache(
-#         shop_domain, targetLanguage, brand_tone, translated_data, fresh_hash, targetCountry)
-
-#     # Save original JSON to file
-#     file_name = f"Today_fetched_{uuid.uuid4().hex}.json"
-#     file_path = os.path.join("fetched_data", file_name)
-#     os.makedirs("fetched_data", exist_ok=True)
-#     with open(file_path, "w", encoding="utf-8") as f:
-#         json.dump(raw_data, f, ensure_ascii=False, indent=2)
-
-#     # Save translated JSON to file
-#     print("Saving translated JSON to file...")
-#     file_name = f"Today_translated_{uuid.uuid4().hex}.json"
-#     file_path = os.path.join("tmp", file_name)
-#     os.makedirs("tmp", exist_ok=True)
-#     with open(file_path, "w", encoding="utf-8") as f:
-#         json.dump(translated_data, f, ensure_ascii=False, indent=2)
-#     print("Translated JSON saved to file:", file_path)
-
-#     # Save to PostgreSQL
-#     translation_record = Translation(
-#         user_id=user_id,
-#         industry=industry,
-#         shop_domain=shop_domain,
-#         brand_tone=brand_tone,
-#         target_lang=targetLanguage,
-#         targetCountry=targetCountry,
-#         content_type="json",
-#         original_text_raw=json.dumps(raw_data, ensure_ascii=False),
-#         original_text_json=raw_data,
-#         translated_text_raw=json.dumps(translated_data, ensure_ascii=False),
-#         translated_text_json=translated_data
-#     )
-#     db.add(translation_record)
-#     db.commit()
-#     db.refresh(translation_record)
-
-#     print("Celery task started...")
-#     task = store_data.delay(translated_data, req,
-#                             raw_data, translation_record.id)
-#     print(f"New task ID: {task.id}")
-
-#     # Return file for download
-#     return {
-#         "message": "Translation completed successfully",
-#         "file_path": file_path,
-#         "translation_id": translation_record.id,
-#         "translation": translated_data
-#     }
-
-
 def validate_language_and_country_old(target_language: str, target_country: str, text: str) -> tuple[bool, str]:
     """
     Validate if the target language, country, and text are compatible.
@@ -1576,3 +1143,436 @@ async def update_translated_string(req: UpdateRequest, db: Session = Depends(get
 #     except Exception as e:
 #         print(" Unexpected API error:", str(e))
 #         return {"status": "error", "message": str(e)}
+
+
+# version of translate endpoint with improved code at 15-11-2025 at 12:40 PM
+# @router.post("/shopify/translate")
+# async def shopify_translate(req: dict, db: Session = Depends(get_db)):
+#     """
+#     Translate Shopify store data or specific text.
+#     Expect body:
+#     {
+#       "shopDomain": "...",
+#       "accessToken": "...",
+#       "targetLanguage": "fr",
+#       "targetcountry": "FR",
+#       "brandTone": "neutral",
+#       "text": "..."  # Optional
+#     }
+#     """
+#     try:
+#         # Validate required fields
+#         allowed_fields = {"shopDomain", "accessToken",
+#                           "targetLanguage", "targetcountry", "brandTone"}
+#         required_fields = ["shopDomain", "accessToken",
+#                            "targetLanguage", "brandTone", "targetcountry"]
+
+#         # Check for unknown fields
+#         unknown_fields = [f for f in req.keys() if f not in allowed_fields]
+#         if unknown_fields:
+#             raise HTTPException(
+#                 status_code=400,
+#                 detail=f"Unknown fields in payload: {', '.join(unknown_fields)}. Allowed fields: {', '.join(allowed_fields)}"
+#             )
+
+#         missing = [f for f in required_fields if f not in req]
+#         if missing:
+#             raise HTTPException(
+#                 status_code=400, detail=f"Missing required fields: {', '.join(missing)}")
+
+#         # Check for empty values
+#         empty_fields = [f for f in required_fields if not str(req[f]).strip()]
+#         if empty_fields:
+#             raise HTTPException(
+#                 status_code=400, detail=f"Empty values found in: {', '.join(empty_fields)}")
+
+#         # Validate shop domain
+#         shop_domain = req["shopDomain"].strip()
+#         domain_pattern = re.compile(r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$")
+#         if not domain_pattern.match(shop_domain):
+#             raise HTTPException(
+#                 status_code=400, detail="Invalid shop domain format. Please enter a valid domain like 'example.myshopify.com'.")
+
+#         # Validate target language and country
+#         target_language = req["targetLanguage"]
+#         target_country = req["targetcountry"]
+#         text = req.get("text")
+#         valid, msg = validate_language_and_country(
+#             target_language, target_country, text)
+#         if not valid:
+#             raise HTTPException(status_code=400, detail=msg)
+
+#         # Validate brand tone
+#         brand_tone = req["brandTone"].strip()
+#         # if brand_tone not in BRAND_TONES:
+#         #     supported_tones = ", ".join(BRAND_TONES)
+#         #     raise HTTPException(
+#         #         status_code=400, detail=f"Invalid brand tone '{brand_tone}'. Supported tones: {supported_tones}.")
+
+#         # Get user from MongoDB
+#         user = users_collection.find_one(
+#             {"shopifyStores.shopDomain": shop_domain})
+#         if not user:
+#             raise HTTPException(status_code=404, detail="Shop not found")
+#         industry = user.get("industry", "general")
+#         user_id = str(user["_id"])
+
+#         # Check extracted data cache
+#         cache_key = f"shopify_data:{shop_domain}:{target_language}:{target_country}"
+#         cached_data = get_cached_extracted_data(cache_key)
+#         raw_data = None
+
+#         if cached_data:
+#             url = "https://stagingapi.globalflow.ai/api/shopify/unauth/get-all-store-data"
+#             response = requests.post(url, json={
+#                 "shopDomain": shop_domain,
+#                 "accessToken": req["accessToken"],
+#                 "targetLanguage": target_language,
+#                 "brandTone": brand_tone,
+#                 "targetcountry": target_country
+#             })
+#             response.raise_for_status()
+#             fresh_data = response.json()
+#             fresh_hash = compute_raw_hash(fresh_data)
+#             cached_hash = compute_raw_hash(cached_data)
+
+#             if fresh_hash == cached_hash:
+#                 logger.info(
+#                     f"Extracted data cache hit for {shop_domain}:{target_language}:{target_country}")
+#                 raw_data = cached_data
+#             else:
+#                 logger.info(
+#                     f"Extracted data cache miss (hash mismatch: {cached_hash[:8]} != {fresh_hash[:8]})")
+#                 raw_data = fresh_data
+#         else:
+#             logger.info(
+#                 f"No cached extracted data for {shop_domain}:{target_language}:{target_country}")
+#             url = "https://stagingapi.globalflow.ai/api/shopify/unauth/get-all-store-data"
+#             response = requests.post(url, json={
+#                 "shopDomain": shop_domain,
+#                 "accessToken": req["accessToken"],
+#                 "targetLanguage": target_language,
+#                 "brandTone": brand_tone,
+#                 "targetcountry": target_country
+#             })
+#             response.raise_for_status()
+#             raw_data = response.json()
+
+#         # Cache the extracted data
+#         cache_extracted_data(cache_key, raw_data)
+
+#         # Check full translation cache
+#         fresh_hash = compute_raw_hash(raw_data)
+#         cached_translated = get_full_translation_from_cache(
+#             shop_domain, target_language, brand_tone, fresh_hash, target_country)
+#         if cached_translated:
+#             logger.info(
+#                 f"Translation served from cache for {shop_domain} (hash match)")
+#             file_name = f"Today_fetched_{uuid.uuid4().hex}.json"
+#             file_path = os.path.join("fetched_data", file_name)
+#             os.makedirs("fetched_data", exist_ok=True)
+#             with open(file_path, "w", encoding="utf-8") as f:
+#                 json.dump(raw_data, f, ensure_ascii=False, indent=2)
+
+#             translation_record = Translation(
+#                 user_id=user_id,
+#                 industry=industry,
+#                 shop_domain=shop_domain,
+#                 brand_tone=brand_tone,
+#                 target_lang=target_language,
+#                 targetCountry=target_country,
+#                 content_type="json",
+#                 original_text_raw=json.dumps(raw_data, ensure_ascii=False),
+#                 original_text_json=raw_data,
+#                 translated_text_raw=json.dumps(
+#                     cached_translated, ensure_ascii=False),
+#                 translated_text_json=cached_translated
+#             )
+#             db.add(translation_record)
+#             db.commit()
+#             db.refresh(translation_record)
+
+#             logger.info("Celery task started...")
+#             task = store_data.delay(
+#                 cached_translated, req, raw_data, translation_record.id)
+#             logger.info(f"New task ID: {task.id}")
+
+#             return {
+#                 "message": "Translation served from cache (data unchanged)",
+#                 "file_path": file_path,
+#                 "translation_id": translation_record.id,
+#                 "translation": cached_translated
+#             }
+
+#         # Cache miss: Run full translation pipeline
+#         translated_data = await fast_translate_json(
+#             raw_data,
+#             user_id=user_id,
+#             shopDomain=shop_domain,
+#             target_lang=target_language,
+#             targetCountry=target_country,
+#             brand_tone=brand_tone,
+#             industry=industry,
+#             text=text
+#         )
+
+#         # Cache the full translated JSON
+#         set_full_translation_in_cache(
+#             shop_domain, target_language, brand_tone, translated_data, fresh_hash, target_country)
+
+#         # Save original JSON to file
+#         file_name = f"Today_fetched_{uuid.uuid4().hex}.json"
+#         file_path = os.path.join("fetched_data", file_name)
+#         os.makedirs("fetched_data", exist_ok=True)
+#         with open(file_path, "w", encoding="utf-8") as f:
+#             json.dump(raw_data, f, ensure_ascii=False, indent=2)
+
+#         # Save translated JSON to file
+#         logger.info("Saving translated JSON to file...")
+#         file_name = f"Today_translated_{uuid.uuid4().hex}.json"
+#         file_path = os.path.join("tmp", file_name)
+#         os.makedirs("tmp", exist_ok=True)
+#         with open(file_path, "w", encoding="utf-8") as f:
+#             json.dump(translated_data, f, ensure_ascii=False, indent=2)
+#         logger.info(f"Translated JSON saved to file: {file_path}")
+
+#         # Save to PostgreSQL
+#         translation_record = Translation(
+#             user_id=user_id,
+#             industry=industry,
+#             shop_domain=shop_domain,
+#             brand_tone=brand_tone,
+#             target_lang=target_language,
+#             targetCountry=target_country,
+#             content_type="json",
+#             original_text_raw=json.dumps(raw_data, ensure_ascii=False),
+#             original_text_json=raw_data,
+#             translated_text_raw=json.dumps(
+#                 translated_data, ensure_ascii=False),
+#             translated_text_json=translated_data
+#         )
+#         db.add(translation_record)
+#         db.commit()
+#         db.refresh(translation_record)
+
+#         logger.info("Celery task started...")
+#         task = store_data.delay(translated_data, req,
+#                                 raw_data, translation_record.id)
+#         logger.info(f"New task ID: {task.id}")
+
+#         return {
+#             "message": "Translation completed successfully",
+#             "file_path": file_path,
+#             "translation_id": translation_record.id,
+#             "translation": translated_data
+#         }
+
+#     except HTTPException as e:
+#         raise e
+#     except Exception as e:
+#         logger.error(f"Unexpected error in shopify/translate: {str(e)}")
+#         raise HTTPException(
+#             status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+# @router.post("/shopify/translate")
+# async def shopify_translate(req: dict, db: Session = Depends(get_db)):
+#     """
+#     Expect body:
+#     {
+#       "shopDomain": "...",
+#       "accessToken": "...",
+#       "targetLanguage": "fr",
+#       "targetcountry":"FR",
+#       "brandTone": "neutral"
+#     }
+#     """
+#     # Validate request
+#     required_fields = ["shopDomain", "accessToken",
+#                        "targetLanguage", "brandTone", "targetcountry"]
+
+#     # Check all required fields exist
+#     missing = [f for f in required_fields if f not in req]
+#     if missing:
+#         raise HTTPException(
+#             status_code=400, detail=f"Missing required fields: {', '.join(missing)}")
+
+#     # Check none are empty or null
+#     empty_fields = [f for f in required_fields if not str(req[f]).strip()]
+#     if empty_fields:
+#         raise HTTPException(
+#             status_code=400, detail=f"Empty values found in: {', '.join(empty_fields)}, please enter an entry for {', '.join(empty_fields)}")
+
+#     # Validate shop domain properly
+#     shop_domain = req["shopDomain"].strip()
+#     domain_pattern = re.compile(
+#         # e.g., something.com or abc.myshopify.com
+#         r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$"
+#     )
+#     if not domain_pattern.match(shop_domain):
+#         raise HTTPException(
+#             status_code=400, detail="Invalid shop domain format. Please enter a valid domain like 'example.myshopify.com'.")
+
+#     # Get user from MongoDB
+#     shop_domain = req["shopDomain"]
+#     targetLanguage = req["targetLanguage"]
+#     targetCountry = req["targetcountry"]
+#     brand_tone = req["brandTone"]
+
+#     user = users_collection.find_one({"shopifyStores.shopDomain": shop_domain})
+#     if not user:
+#         raise HTTPException(status_code=404, detail="Shop not found")
+#     industry = user.get("industry", "general")
+#     user_id = str(user["_id"])
+
+#     # Check extracted data cache
+#     cache_key = f"shopify_data:{shop_domain}:{targetLanguage}:{targetCountry}"
+#     cached_data = get_cached_extracted_data(cache_key)
+#     raw_data = None
+
+#     if cached_data:
+#         # Fetch fresh data to compare
+#         url = "https://stagingapi.globalflow.ai/api/shopify/unauth/get-all-store-data"
+#         response = requests.post(url, json={
+#             "shopDomain": shop_domain,
+#             "accessToken": req["accessToken"],
+#             "targetLanguage": targetLanguage,
+#             "brandTone": brand_tone,
+#             "targetcountry": targetCountry
+#         })
+#         response.raise_for_status()
+#         fresh_data = response.json()
+#         fresh_hash = compute_raw_hash(fresh_data)
+#         cached_hash = compute_raw_hash(cached_data)
+
+#         if fresh_hash == cached_hash:
+#             print(
+#                 f"Extracted data cache hit for {shop_domain}:{targetLanguage}:{targetCountry}")
+#             raw_data = cached_data
+#         else:
+#             print(
+#                 f"Extracted data cache miss (hash mismatch: {cached_hash[:8]} != {fresh_hash[:8]})")
+#             raw_data = fresh_data
+#     else:
+#         print(
+#             f"No cached extracted data for {shop_domain}:{targetLanguage}:{targetCountry}")
+#         # Fetch fresh data from Shopify
+#         url = "https://stagingapi.globalflow.ai/api/shopify/unauth/get-all-store-data"
+#         response = requests.post(url, json={
+#             "shopDomain": shop_domain,
+#             "accessToken": req["accessToken"],
+#             "targetLanguage": targetLanguage,
+#             "brandTone": brand_tone,
+#             "targetcountry": targetCountry
+#         })
+#         response.raise_for_status()
+#         raw_data = response.json()
+
+#     # Cache the extracted data
+#     cache_extracted_data(cache_key, raw_data)
+
+#     # Check full translation cache
+#     fresh_hash = compute_raw_hash(raw_data)
+#     cached_translated = get_full_translation_from_cache(
+#         shop_domain, targetLanguage, brand_tone, fresh_hash, targetCountry)
+#     if cached_translated:
+#         print(f"Translation served from cache for {shop_domain} (hash match)")
+#         # Save original JSON
+#         file_name = f"Today_fetched_{uuid.uuid4().hex}.json"
+#         file_path = os.path.join("fetched_data", file_name)
+#         os.makedirs("fetched_data", exist_ok=True)
+#         with open(file_path, "w", encoding="utf-8") as f:
+#             json.dump(raw_data, f, ensure_ascii=False, indent=2)
+
+#         # Save to PostgreSQL
+#         translation_record = Translation(
+#             user_id=user_id,
+#             industry=industry,
+#             shop_domain=shop_domain,
+#             brand_tone=brand_tone,
+#             target_lang=targetLanguage,
+#             targetCountry=targetCountry,
+#             content_type="json",
+#             original_text_raw=json.dumps(raw_data, ensure_ascii=False),
+#             original_text_json=raw_data,
+#             translated_text_raw=json.dumps(
+#                 cached_translated, ensure_ascii=False),
+#             translated_text_json=cached_translated
+#         )
+#         db.add(translation_record)
+#         db.commit()
+#         db.refresh(translation_record)
+
+#         print("Celery task started...")
+#         task = store_data.delay(cached_translated, req,
+#                                 raw_data, translation_record.id)
+#         print(f"New task ID: {task.id}")
+
+#         return {
+#             "message": "Translation served from cache (data unchanged)",
+#             "file_path": file_path,
+#             "translation_id": translation_record.id,
+#             "translation": cached_translated
+#         }
+
+#     # Cache miss: Run full translation pipeline
+#     translated_data = await fast_translate_json(
+#         raw_data,
+#         user_id=user_id,
+#         shopDomain=shop_domain,
+#         target_lang=targetLanguage,
+#         targetCountry=targetCountry,
+#         brand_tone=brand_tone,
+#         industry=industry
+#     )
+
+#     # Cache the full translated JSON
+#     set_full_translation_in_cache(
+#         shop_domain, targetLanguage, brand_tone, translated_data, fresh_hash, targetCountry)
+
+#     # Save original JSON to file
+#     file_name = f"Today_fetched_{uuid.uuid4().hex}.json"
+#     file_path = os.path.join("fetched_data", file_name)
+#     os.makedirs("fetched_data", exist_ok=True)
+#     with open(file_path, "w", encoding="utf-8") as f:
+#         json.dump(raw_data, f, ensure_ascii=False, indent=2)
+
+#     # Save translated JSON to file
+#     print("Saving translated JSON to file...")
+#     file_name = f"Today_translated_{uuid.uuid4().hex}.json"
+#     file_path = os.path.join("tmp", file_name)
+#     os.makedirs("tmp", exist_ok=True)
+#     with open(file_path, "w", encoding="utf-8") as f:
+#         json.dump(translated_data, f, ensure_ascii=False, indent=2)
+#     print("Translated JSON saved to file:", file_path)
+
+#     # Save to PostgreSQL
+#     translation_record = Translation(
+#         user_id=user_id,
+#         industry=industry,
+#         shop_domain=shop_domain,
+#         brand_tone=brand_tone,
+#         target_lang=targetLanguage,
+#         targetCountry=targetCountry,
+#         content_type="json",
+#         original_text_raw=json.dumps(raw_data, ensure_ascii=False),
+#         original_text_json=raw_data,
+#         translated_text_raw=json.dumps(translated_data, ensure_ascii=False),
+#         translated_text_json=translated_data
+#     )
+#     db.add(translation_record)
+#     db.commit()
+#     db.refresh(translation_record)
+
+#     print("Celery task started...")
+#     task = store_data.delay(translated_data, req,
+#                             raw_data, translation_record.id)
+#     print(f"New task ID: {task.id}")
+
+#     # Return file for download
+#     return {
+#         "message": "Translation completed successfully",
+#         "file_path": file_path,
+#         "translation_id": translation_record.id,
+#         "translation": translated_data
+#     }

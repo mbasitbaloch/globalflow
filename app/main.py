@@ -30,7 +30,7 @@ app = FastAPI(title="GlobalFlow.ai - Phase 1",
               docs_url="/docs",
               redoc_url="/redoc",
               openapi_url="/openapi.json",
-              root_path="/glflow"
+              #   root_path="/glflow"
               )
 
 Base.metadata.create_all(bind=engine)
